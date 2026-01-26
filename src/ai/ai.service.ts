@@ -1,22 +1,26 @@
 import { Injectable } from '@nestjs/common';
-import {
-  BedrockRuntimeClient,
-  ConverseCommand,
-} from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import * as dotenv from 'dotenv';
 
 @Injectable()
 export class AiService {
   private client: BedrockRuntimeClient;
 
   constructor() {
+    dotenv.config();
     this.client = new BedrockRuntimeClient({
-      region: 'ap-southeast-1', 
+      region: process.env.AWS_REGION,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+      },
+      // If you need to use a bearer token, you may need to set it in the request headers or use a custom middleware.
     });
   }
 
   async chat(prompt: string) {
     const command = new ConverseCommand({
-      modelId: 'arn:aws:bedrock:ap-southeast-1:060473539828:inference-profile/apac.amazon.nova-lite-v1:0',
+      modelId: process.env.MODELID || '',
       messages: [
         {
           role: 'user',
@@ -24,10 +28,6 @@ export class AiService {
         },
       ],
       inferenceConfig: {
-
-
-
-        
         maxTokens: 400,
         temperature: 0.7,
         topP: 0.9,
