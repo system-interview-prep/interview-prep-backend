@@ -7,7 +7,7 @@ export class AiController {
 
   @Post('chat')
   async chat(@Body('prompt') prompt: string) {
-    const reply = await this.aiService.chat(prompt);
+    const reply = await this.aiService.chat([{ role: 'user', content: [{ text: prompt }] }]);
     return { reply: reply || '' };
   }
 }
