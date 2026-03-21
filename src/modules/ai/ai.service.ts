@@ -33,7 +33,6 @@ export class AiService {
     });
   }
 
-  // Save a chat message to DynamoDB
   async saveChatMessage(sessionId: string, timestamp: string, role: string, content: string) {
     const params: any = {
       TableName: process.env.DYNAMO_CHAT_TABLE || 'InterviewChats',
@@ -47,20 +46,17 @@ export class AiService {
     await this.dynamo.send(new PutItemCommand(params));
   }
 
-  // Get up to 20 most recent chat messages for a session, sorted by timestamp (oldest to newest)
   async getChatHistory(sessionId: string) {
-    // Query newest first, then reverse for chronological order
     const params = {
       TableName: process.env.DYNAMO_CHAT_TABLE,
       KeyConditionExpression: 'PK = :pk',
       ExpressionAttributeValues: {
         ':pk': { S: `SESSION#${sessionId}` },
       },
-      ScanIndexForward: false, // newest first
+      ScanIndexForward: false,
       Limit: 20,
     };
     const data = await this.dynamo.send(new QueryCommand(params));
-    // Reverse to chronological order (oldest to newest)
     return (data.Items || [])
       .map(item => ({
         role: item.role.S,
@@ -70,9 +66,7 @@ export class AiService {
       .reverse();
   }
 
-  // Delete all chat messages for a session (session reset)
   async resetSession(sessionId: string) {
-    // Query all SKs for the session, then batch delete
     const params = {
       TableName: process.env.DYNAMO_CHAT_TABLE,
       KeyConditionExpression: 'PK = :pk',
@@ -93,10 +87,9 @@ export class AiService {
 
   async chat(
     sessionId: string,
-    newMessage: { role: string, content: string },
+    newMessage: { role: string; content: string },
     language: string,
   ): Promise<any> {
-
     const now = new Date().toISOString();
     await this.saveChatMessage(sessionId, now, newMessage.role, newMessage.content);
 
@@ -117,24 +110,14 @@ export class AiService {
         }),
       );
       const aiText = response.output?.message?.content?.[0]?.text || '';
-      // Lưu luôn câu trả lời của AI vào DynamoDB
       const aiTimestamp = new Date().toISOString();
-      await this.saveChatMessage(
-        sessionId,
-        aiTimestamp,
-        'assistant',
-        aiText
-      );
+      await this.saveChatMessage(sessionId, aiTimestamp, 'assistant', aiText);
       return aiText;
     } catch (error: any) {
-      if (error.name === "ModelNotReady") {
-        console.error(
-          `${error.name} - Model not ready, please wait and try again.`,
-        );
-      } else if (error.name === "BedrockRuntimeException") {
-        console.error(
-          `${error.name} - Error occurred while sending Converse request`,
-        );
+      if (error.name === 'ModelNotReady') {
+        console.error(`${error.name} - Model not ready, please wait and try again.`);
+      } else if (error.name === 'BedrockRuntimeException') {
+        console.error(`${error.name} - Error occurred while sending Converse request`);
       }
       throw error;
     }
@@ -142,7 +125,7 @@ export class AiService {
 
   async chatToSpeech(
     sessionId: string,
-    newMessage: { role: string, content: string },
+    newMessage: { role: string; content: string },
     language: string,
   ): Promise<{ reply: string; audioBase64: string; mimeType: string }> {
     const reply = await this.chat(sessionId, newMessage, language);
@@ -171,25 +154,15 @@ export class AiService {
   }
 
   private getMimeType(outputFormat: string): string {
-    if (outputFormat.startsWith('mp3')) {
-      return 'audio/mpeg';
-    }
-    if (outputFormat.startsWith('wav')) {
-      return 'audio/wav';
-    }
-    if (outputFormat.startsWith('ogg')) {
-      return 'audio/ogg';
-    }
+    if (outputFormat.startsWith('mp3')) return 'audio/mpeg';
+    if (outputFormat.startsWith('wav')) return 'audio/wav';
+    if (outputFormat.startsWith('ogg')) return 'audio/ogg';
     return 'application/octet-stream';
   }
 
   private async readAudioToBuffer(audio: any): Promise<Buffer> {
-    if (Buffer.isBuffer(audio)) {
-      return audio;
-    }
-    if (audio instanceof Uint8Array) {
-      return Buffer.from(audio);
-    }
+    if (Buffer.isBuffer(audio)) return audio;
+    if (audio instanceof Uint8Array) return Buffer.from(audio);
     if (audio?.arrayBuffer) {
       const arrayBuffer = await audio.arrayBuffer();
       return Buffer.from(arrayBuffer);
@@ -218,11 +191,8 @@ export class AiService {
     throw new Error('Unsupported audio response type from ElevenLabs');
   }
 
-    // Lấy tất cả sessionId (PK duy nhất)
-  // Lấy tất cả sessionId (PK duy nhất), sắp xếp theo thời gian gần nhất (dựa trên SK lớn nhất)
   async getAllSessionIds(): Promise<string[]> {
     let lastKey = undefined;
-    // Map: sessionId -> max timestamp (SK)
     const sessionMap = new Map<string, string>();
     do {
       const data = await this.dynamo.send(new ScanCommand({
@@ -241,9 +211,42 @@ export class AiService {
       });
       lastKey = data.LastEvaluatedKey;
     } while (lastKey);
-    // Sort sessionIds by timestamp (desc)
     return Array.from(sessionMap.entries())
       .sort((a, b) => (a[1] < b[1] ? 1 : -1))
       .map(([sessionId]) => sessionId);
+  }
+
+  async createSimliSession(faceId?: string): Promise<string> {
+    const apiKey = process.env.SIMLI_API_KEY;
+    if (!apiKey) {
+      throw new Error('SIMLI_API_KEY is not configured');
+    }
+
+    const payload = {
+      apiKey: apiKey,
+      faceId: faceId || process.env.SIMLI_FACE_ID || 'tmp9lt11ci',
+      syncAudio: true,
+      isJPG: false,
+    };
+
+    const response = await fetch('https://api.simli.ai/startAudioToVideoSession', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to create Simli session: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    if (!data.session_token) {
+      throw new Error(`Invalid response from Simli API: ${JSON.stringify(data)}`);
+    }
+
+    return data.session_token;
   }
 }

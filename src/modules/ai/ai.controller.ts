@@ -12,6 +12,16 @@ export class AiController {
     return { sessionId };
   }
 
+  @Post('simli-session')
+  async createSimliSession(@Body('faceId') faceId?: string) {
+    try {
+      const session_token = await this.aiService.createSimliSession(faceId);
+      return { session_token };
+    } catch (error: any) {
+      return { error: error.message };
+    }
+  }
+
   @Post('chat')
   async chat(
     @Body('sessionId') sessionId: string,
@@ -20,8 +30,8 @@ export class AiController {
   ) {
     const reply = await this.aiService.chat(
       sessionId,
-      { role: 'user', content: prompt},
-      language
+      { role: 'user', content: prompt },
+      language,
     );
     return { reply: reply || '' };
   }
@@ -35,13 +45,16 @@ export class AiController {
     const result = await this.aiService.chatToSpeech(
       sessionId,
       { role: 'user', content: prompt },
-      language
+      language,
     );
     return result;
   }
 
   @Get('history')
-  async getHistory(@Query('sessionId') sessionId: string, @Query('limit') limit?: number) {
+  async getHistory(
+    @Query('sessionId') sessionId: string,
+    @Query('limit') limit?: number,
+  ) {
     const history = await this.aiService.getChatHistory(sessionId);
     return { history };
   }
@@ -51,5 +64,4 @@ export class AiController {
     const sessions = await this.aiService.getAllSessionIds();
     return { sessions };
   }
-
 }
