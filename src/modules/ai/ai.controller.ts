@@ -22,6 +22,16 @@ export class AiController {
     }
   }
 
+  @Post('simli-ice-servers')
+  async getSimliIceServers() {
+    try {
+      const iceServers = await this.aiService.getSimliIceServers();
+      return { iceServers };
+    } catch (error: any) {
+      return { iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] };
+    }
+  }
+
   @Post('chat')
   async chat(
     @Body('sessionId') sessionId: string,

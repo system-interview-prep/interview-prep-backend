@@ -66,8 +66,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 2. Forward to AI and broadcast the reply
     try {
       const language = data.language || 'english';
-      const reply = await this.aiService.chat(
-        data.roomId,                          // use roomId as sessionId
+      // Thay đổi: Dùng chatToSpeech để sinh luôn Audio Base64 (dạng PCM_16000)
+      const { reply, audioBase64 } = await this.aiService.chatToSpeech(
+        data.roomId,
         { role: 'user', content: data.content },
         language,
       );
@@ -81,6 +82,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
 
       this.server.to(data.roomId).emit('message', aiMessage);
+      
+      // Nếu có đoạn thu âm PCM, gửi xuống Frontend để nhép môi Simli
+      if (audioBase64) {
+        this.server.to(data.roomId).emit('ai-audio', { audioBase64 });
+      }
     } catch (err) {
       this.logger.error('AI reply failed', err);
       // Emit an error notice only to the sender so the room isn't disrupted

@@ -2,7 +2,8 @@
 import { Injectable } from '@nestjs/common';
 import { BedrockRuntimeClient, ConversationRole, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, ScanCommand } from '@aws-sdk/client-dynamodb';
-import { ElevenLabsClient, ElevenLabs } from '@elevenlabs/elevenlabs-js';
+import { TTSProvider } from './utils/tts.interface';
+import { ElevenLabsUtil } from './utils/elevenlabs.util';
 import { SYSTEM_PROMPT } from './system-prompt';
 import * as dotenv from 'dotenv';
 
@@ -10,7 +11,7 @@ import * as dotenv from 'dotenv';
 export class AiService {
   private client: BedrockRuntimeClient;
   private dynamo: DynamoDBClient;
-  private elevenlabs: ElevenLabsClient;
+  private ttsProvider: TTSProvider;
 
   constructor() {
     dotenv.config();
@@ -28,9 +29,8 @@ export class AiService {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
       },
     });
-    this.elevenlabs = new ElevenLabsClient({
-      apiKey: process.env.ELEVENLABS_API_KEY || '',
-    });
+    // Tương lai có thể đổi sang provider khác tuỳ cấu hình
+    this.ttsProvider = new ElevenLabsUtil();
   }
 
   async saveChatMessage(sessionId: string, timestamp: string, role: string, content: string) {
@@ -129,67 +129,18 @@ export class AiService {
     language: string,
   ): Promise<{ reply: string; audioBase64: string; mimeType: string }> {
     const reply = await this.chat(sessionId, newMessage, language);
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || '';
-    const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
-    const outputFormat = (process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_44100_128') as ElevenLabs.TextToSpeechConvertRequestOutputFormat;
-
-    if (!voiceId) {
-      throw new Error('ELEVENLABS_VOICE_ID is not configured');
-    }
-
-    const audio = await this.elevenlabs.textToSpeech.convert(voiceId, {
-      text: reply || '',
-      modelId,
-      outputFormat,
-    });
-
-    const audioBuffer = await this.readAudioToBuffer(audio);
-    const mimeType = this.getMimeType(outputFormat);
+    
+    // Uỷ quyền cho TTS Util tạo Base64 Audio
+    const { audioBase64, mimeType } = await this.ttsProvider.convertTextToSpeech(reply || '');
 
     return {
       reply: reply || '',
-      audioBase64: audioBuffer.toString('base64'),
+      audioBase64,
       mimeType,
     };
   }
 
-  private getMimeType(outputFormat: string): string {
-    if (outputFormat.startsWith('mp3')) return 'audio/mpeg';
-    if (outputFormat.startsWith('wav')) return 'audio/wav';
-    if (outputFormat.startsWith('ogg')) return 'audio/ogg';
-    return 'application/octet-stream';
-  }
 
-  private async readAudioToBuffer(audio: any): Promise<Buffer> {
-    if (Buffer.isBuffer(audio)) return audio;
-    if (audio instanceof Uint8Array) return Buffer.from(audio);
-    if (audio?.arrayBuffer) {
-      const arrayBuffer = await audio.arrayBuffer();
-      return Buffer.from(arrayBuffer);
-    }
-    if (audio?.transformToByteArray) {
-      const byteArray = await audio.transformToByteArray();
-      return Buffer.from(byteArray);
-    }
-    if (audio?.[Symbol.asyncIterator]) {
-      const chunks: Buffer[] = [];
-      for await (const chunk of audio) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      return Buffer.concat(chunks);
-    }
-    if (audio?.on && audio?.pipe) {
-      return new Promise((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        audio.on('data', (chunk: Buffer | Uint8Array) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        audio.on('end', () => resolve(Buffer.concat(chunks)));
-        audio.on('error', reject);
-      });
-    }
-    throw new Error('Unsupported audio response type from ElevenLabs');
-  }
 
   async getAllSessionIds(): Promise<string[]> {
     let lastKey = undefined;
@@ -248,5 +199,24 @@ export class AiService {
     }
 
     return data.session_token;
+  }
+
+  async getSimliIceServers(): Promise<any[]> {
+    const apiKey = process.env.SIMLI_API_KEY;
+    if (!apiKey) {
+      throw new Error('SIMLI_API_KEY is not configured');
+    }
+
+    const response = await fetch('https://api.simli.ai/getIceServers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey }),
+    });
+
+    if (!response.ok) {
+      return [{ urls: ['stun:stun.l.google.com:19302'] }];
+    }
+    const iceServers = await response.json();
+    return iceServers;
   }
 }
