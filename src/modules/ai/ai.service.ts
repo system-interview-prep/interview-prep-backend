@@ -2,8 +2,10 @@
 import { Injectable } from '@nestjs/common';
 import { BedrockRuntimeClient, ConversationRole, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, PutItemCommand, QueryCommand, DeleteItemCommand, ScanCommand } from '@aws-sdk/client-dynamodb';
+import { v4 as uuidv4 } from 'uuid';
 import { TTSProvider } from './utils/tts.interface';
 import { ElevenLabsUtil } from './utils/elevenlabs.util';
+import { S3Util } from './utils/s3.util';
 import { SYSTEM_PROMPT } from './system-prompt';
 import * as dotenv from 'dotenv';
 
@@ -12,6 +14,10 @@ export class AiService {
   private client: BedrockRuntimeClient;
   private dynamo: DynamoDBClient;
   private ttsProvider: TTSProvider;
+  private s3Util: S3Util;
+
+  private sessionTableName: string;
+  private messageTableName: string;
 
   constructor() {
     dotenv.config();
@@ -29,71 +35,107 @@ export class AiService {
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
       },
     });
-    // Tương lai có thể đổi sang provider khác tuỳ cấu hình
     this.ttsProvider = new ElevenLabsUtil();
+    this.s3Util = new S3Util();
+
+    this.sessionTableName = process.env.DYNAMO_SESSION_TABLE || 'InterviewSessions';
+    this.messageTableName = process.env.DYNAMO_MESSAGE_TABLE || 'Messages';
   }
 
-  async saveChatMessage(sessionId: string, timestamp: string, role: string, content: string) {
-    const params: any = {
-      TableName: process.env.DYNAMO_CHAT_TABLE || 'InterviewChats',
+  async createInterviewSession(userId: string, type: string = 'General', language: string = 'English'): Promise<string> {
+    const sessionId = uuidv4();
+    const now = new Date().toISOString();
+
+    await this.dynamo.send(new PutItemCommand({
+      TableName: this.sessionTableName,
       Item: {
-        PK: { S: `SESSION#${sessionId}` },
-        SK: { S: timestamp },
-        role: { S: role },
-        content: { S: content },
+        id: { S: sessionId },
+        user_id: { S: userId },
+        type: { S: type },
+        language: { S: language },
+        status: { S: 'Open' },
+        started_at: { S: now },
       },
+    }));
+    return sessionId;
+  }
+
+  async saveChatMessage(sessionId: string, timestamp: string, sender: string, content: string, audioUrl: string = '') {
+    const messageId = uuidv4();
+    const item: Record<string, any> = {
+      id: { S: messageId },
+      session_id: { S: sessionId },
+      sender: { S: sender }, // 'user' or 'assistant'
+      type: { S: audioUrl ? 'audio' : 'text' },
+      content: { S: content },
+      created_at: { S: timestamp },
     };
-    await this.dynamo.send(new PutItemCommand(params));
+
+    if (audioUrl) {
+      item.audio_url = { S: audioUrl };
+    }
+
+    await this.dynamo.send(new PutItemCommand({
+      TableName: this.messageTableName,
+      Item: item,
+    }));
   }
 
   async getChatHistory(sessionId: string) {
     const params = {
-      TableName: process.env.DYNAMO_CHAT_TABLE,
-      KeyConditionExpression: 'PK = :pk',
+      TableName: this.messageTableName,
+      IndexName: 'session_id-index',
+      KeyConditionExpression: 'session_id = :sid',
       ExpressionAttributeValues: {
-        ':pk': { S: `SESSION#${sessionId}` },
+        ':sid': { S: sessionId },
       },
-      ScanIndexForward: false,
-      Limit: 20,
+      // Note: If you want to sort by created_at, the GSI must have created_at as Sort Key.
+      // ScanIndexForward: true, 
     };
+
     const data = await this.dynamo.send(new QueryCommand(params));
-    return (data.Items || [])
-      .map(item => ({
-        role: item.role.S,
-        content: item.content.S,
-        timestamp: item.SK.S,
-      }))
-      .reverse();
+    
+    // Fallback sort in case GSI has no sort key configured yet
+    const items = (data.Items || []).sort((a, b) => a.created_at.S.localeCompare(b.created_at.S));
+
+    return items.map(item => ({
+      role: item.sender.S,
+      content: item.content.S,
+      audio_url: item.audio_url?.S || null,
+      timestamp: item.created_at.S,
+    }));
   }
 
-  async resetSession(sessionId: string) {
+  async getAllSessionsByUser(userId: string) {
     const params = {
-      TableName: process.env.DYNAMO_CHAT_TABLE,
-      KeyConditionExpression: 'PK = :pk',
+      TableName: this.sessionTableName,
+      IndexName: 'user_id-index',
+      KeyConditionExpression: 'user_id = :uid',
       ExpressionAttributeValues: {
-        ':pk': { S: `SESSION#${sessionId}` },
+        ':uid': { S: userId },
       },
-      ProjectionExpression: 'PK, SK',
     };
+    
     const data = await this.dynamo.send(new QueryCommand(params));
-    if (!data.Items) return;
-    for (const item of data.Items) {
-      await this.dynamo.send(new DeleteItemCommand({
-        TableName: process.env.DYNAMO_CHAT_TABLE,
-        Key: { PK: { S: item.PK.S }, SK: { S: item.SK.S } },
-      }));
-    }
+    return (data.Items || []).map((item) => ({
+      id: item.id.S,
+      type: item.type?.S,
+      language: item.language?.S,
+      status: item.status?.S,
+      started_at: item.started_at?.S,
+    }));
   }
 
   async chat(
     sessionId: string,
     newMessage: { role: string; content: string },
     language: string,
-  ): Promise<any> {
+  ): Promise<string> {
     const now = new Date().toISOString();
     await this.saveChatMessage(sessionId, now, newMessage.role, newMessage.content);
 
     const history = await this.getChatHistory(sessionId);
+    // Build context
     const messages = history.map(msg => ({
       role: msg.role as ConversationRole,
       content: [{ text: msg.content }],
@@ -111,7 +153,7 @@ export class AiService {
       );
       const aiText = response.output?.message?.content?.[0]?.text || '';
       const aiTimestamp = new Date().toISOString();
-      await this.saveChatMessage(sessionId, aiTimestamp, 'assistant', aiText);
+      await this.saveChatMessage(sessionId, aiTimestamp, 'assistant', aiText); // Text version
       return aiText;
     } catch (error: any) {
       if (error.name === 'ModelNotReady') {
@@ -128,43 +170,48 @@ export class AiService {
     newMessage: { role: string; content: string },
     language: string,
   ): Promise<{ reply: string; audioBase64: string; mimeType: string }> {
-    const reply = await this.chat(sessionId, newMessage, language);
-    
-    // Uỷ quyền cho TTS Util tạo Base64 Audio
-    const { audioBase64, mimeType } = await this.ttsProvider.convertTextToSpeech(reply || '');
+    // 1. Phản hồi Text
+    const now = new Date().toISOString();
+    await this.saveChatMessage(sessionId, now, newMessage.role, newMessage.content);
+
+    const history = await this.getChatHistory(sessionId);
+    const messages = history.map(msg => ({
+      role: msg.role as ConversationRole,
+      content: [{ text: msg.content }],
+    }));
+
+    const systemPrompt = [{ text: `${SYSTEM_PROMPT}\n\nALL RESPONSES MUST BE IN: ${language.toUpperCase()}` }];
+    let replyText = '';
+
+    try {
+      const response = await this.client.send(
+        new ConverseCommand({
+          modelId: process.env.MODELID || '',
+          system: systemPrompt,
+          messages,
+        }),
+      );
+      replyText = response.output?.message?.content?.[0]?.text || '';
+    } catch (e) {
+      console.error(e);
+      throw e;
+    }
+
+    // 2. Chuyển đổi TTS
+    const { audioBase64, mimeType } = await this.ttsProvider.convertTextToSpeech(replyText);
+
+    // 3. Đẩy file Audio lên S3 lưu lấy link
+    const audioUrl = await this.s3Util.uploadAudioBase64(audioBase64, mimeType);
+
+    // 4. Lưu log vào bảng Messages
+    const aiTimestamp = new Date().toISOString();
+    await this.saveChatMessage(sessionId, aiTimestamp, 'assistant', replyText, audioUrl);
 
     return {
-      reply: reply || '',
+      reply: replyText,
       audioBase64,
       mimeType,
     };
-  }
-
-
-
-  async getAllSessionIds(): Promise<string[]> {
-    let lastKey = undefined;
-    const sessionMap = new Map<string, string>();
-    do {
-      const data = await this.dynamo.send(new ScanCommand({
-        TableName: process.env.DYNAMO_CHAT_TABLE,
-        ProjectionExpression: 'PK, SK',
-        ExclusiveStartKey: lastKey,
-      }));
-      (data.Items || []).forEach(item => {
-        if (item.PK && item.PK.S && item.SK && item.SK.S) {
-          const sessionId = item.PK.S.replace('SESSION#', '');
-          const timestamp = item.SK.S;
-          if (!sessionMap.has(sessionId) || sessionMap.get(sessionId)! < timestamp) {
-            sessionMap.set(sessionId, timestamp);
-          }
-        }
-      });
-      lastKey = data.LastEvaluatedKey;
-    } while (lastKey);
-    return Array.from(sessionMap.entries())
-      .sort((a, b) => (a[1] < b[1] ? 1 : -1))
-      .map(([sessionId]) => sessionId);
   }
 
   async createSimliSession(faceId?: string): Promise<string> {
@@ -194,10 +241,6 @@ export class AiService {
     }
 
     const data = await response.json();
-    if (!data.session_token) {
-      throw new Error(`Invalid response from Simli API: ${JSON.stringify(data)}`);
-    }
-
     return data.session_token;
   }
 

@@ -9,10 +9,21 @@ export class AuthController {
   @Post('register')
   async register(
     @Body('email') email: string,
-    @Body('password') password: string,
-    @Body('name') name: string,
+    @Body('password') password?: string,
+    @Body('name') name?: string,
+    @Body('dob') dob?: string,
+    @Body('role') role?: string,
+    @Body('provider') provider?: string,
   ) {
-    return this.authService.register({ email, password, name });
+    // defaults
+    return this.authService.register({ 
+      email, 
+      password, 
+      name: name || 'User',
+      dob,
+      role: role || 'CANDIDATE',
+      provider: provider || 'local'
+    });
   }
 
   /** POST /auth/login */
@@ -20,8 +31,18 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(
     @Body('email') email: string,
-    @Body('password') password: string,
+    @Body('password') password?: string,
   ) {
     return this.authService.login({ email, password });
   }
+
+  /** POST /auth/google */
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  async googleLogin(
+    @Body('accessToken') accessToken: string,
+  ) {
+    return this.authService.googleLogin(accessToken);
+  }
 }
+

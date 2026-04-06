@@ -1,14 +1,18 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Controller, Post, Body, Get, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, UseGuards, Request } from '@nestjs/common';
 import { AiService } from './ai.service';
+import { AuthGuard } from '../auth/auth.guard'; // Middleware lọc Token
 
 @Controller('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
 
+  // Bảo vệ Router (Chỉ Request Header chứa "Bearer {token}" hợp lệ mới được đi qua)
+  @UseGuards(AuthGuard)
   @Post('session')
-  async createSession() {
-    const sessionId = uuidv4();
+  async createSession(@Request() req: any, @Body('type') type?: string, @Body('language') language?: string) {
+    const userId = req.user.sub; // Trích xuất từ JWT Payload (sub = id)
+    const sessionId = await this.aiService.createInterviewSession(userId, type, language);
     return { sessionId };
   }
 
@@ -63,15 +67,17 @@ export class AiController {
   @Get('history')
   async getHistory(
     @Query('sessionId') sessionId: string,
-    @Query('limit') limit?: number,
   ) {
     const history = await this.aiService.getChatHistory(sessionId);
     return { history };
   }
 
+  @UseGuards(AuthGuard)
   @Get('sessions')
-  async getAllSessions() {
-    const sessions = await this.aiService.getAllSessionIds();
+  async getAllSessions(@Request() req: any) {
+    // Lấy riêng biệt lịch sử phỏng vấn của người dùng này
+    const userId = req.user.sub;
+    const sessions = await this.aiService.getAllSessionsByUser(userId);
     return { sessions };
   }
 }
