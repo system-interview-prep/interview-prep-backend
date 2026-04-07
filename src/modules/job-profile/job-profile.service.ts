@@ -19,7 +19,7 @@ import { CreateJobProfileDto } from './dto/create-job-profile.dto';
 import { UpdateJobProfileDto } from './dto/update-job-profile.dto';
 import { JobProfile, ListJobProfilesResult } from './job-profile.types';
 import { JobCategoryService } from '../job-category/job-category.service';
-import { AiService } from '../ai/ai.service';
+import { AiProviderService } from '../ai/ai-provider.service';
 
 function normalizeKeyword(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -49,7 +49,7 @@ export class JobProfileService {
   private client: DynamoDBClient;
   private tableName: string;
   private jobCategoryService: JobCategoryService;
-  private aiService: AiService;
+  private aiService: AiProviderService;
 
   constructor() {
     this.client = new DynamoDBClient({
@@ -61,7 +61,7 @@ export class JobProfileService {
     });
     this.tableName = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
     this.jobCategoryService = new JobCategoryService();
-    this.aiService = new AiService();
+    this.aiService = new AiProviderService();
   }
 
   private toDomain(item: Record<string, any>): JobProfile {

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
-import { AiService } from '../ai/ai.service';
+import { VoiceService } from '../voice/voice.service';
 
 interface ChatMessage {
   roomId: string;
@@ -23,14 +23,14 @@ interface ChatMessage {
 /**
  * ChatGateway – Realtime chat via Socket.IO (/chat namespace).
  * Supports room-based messaging during interview sessions.
- * After each user message, forwards content to AiService and relays the reply.
+ * After each user message, forwards content to VoiceService and relays the reply.
  */
 @WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(ChatGateway.name);
 
-  constructor(private readonly aiService: AiService) {}
+  constructor(private readonly voiceService: VoiceService) {}
 
   handleConnection(client: Socket) {
     this.logger.log(`Chat client connected: ${client.id}`);
@@ -66,12 +66,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // 2. Forward to AI and broadcast the reply
     try {
       const language = data.language || 'english';
-      // Thay đổi: Dùng chatToSpeech để sinh luôn Audio Base64 (dạng PCM_16000)
-      const { reply, audioBase64 } = await this.aiService.chatToSpeech(
-        data.roomId,
-        { role: 'user', content: data.content },
+      const { reply, audioBase64 } = await this.voiceService.chatVoice({
+        sessionId: data.roomId,
+        prompt: data.content,
         language,
-      );
+      });
 
       const aiMessage: ChatMessage = {
         roomId: data.roomId,

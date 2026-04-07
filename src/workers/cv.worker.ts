@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import axios from 'axios';
-import { AiService } from '../modules/ai/ai.service';
+import { AiProviderService } from '../modules/ai/ai-provider.service';
 import { UserCvService } from '../modules/user-cv/user-cv.service';
 import { S3Util } from '../utils/s3.util';
 import { SqsUtil } from '../utils/sqs.util';
@@ -98,7 +98,7 @@ async function processOne(msg: CvQueueMessage) {
 
   const userCv = new UserCvService();
   const s3 = new S3Util();
-  const ai = new AiService();
+  const ai = new AiProviderService();
 
   // --- Worker 1 ---
   const buffer = await L.time('W1:s3:GetObject', () => s3.getObjectBuffer(msg.s3Key), {
