@@ -57,10 +57,10 @@ export class VoiceService {
 
   async chatVoice(params: { sessionId: string; prompt: string; language: string }) {
     const now = nowISO();
-    // save user prompt as text turn (so history stays complete)
+    // Voice mode: persist user prompt in voice table (type=text) so we don't pollute InterviewChatText.
     await this.client.send(
       new PutItemCommand({
-        TableName: this.chatTextTableName,
+        TableName: this.chatVoiceTableName,
         Item: {
           id: { S: uuidv4() },
           session_id: { S: params.sessionId },
