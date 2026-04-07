@@ -1,3 +1,4 @@
+import * as path from 'path';
 import type { PipelineLogger } from './cv-pipeline.logger';
 
 /**
@@ -9,7 +10,6 @@ import type { PipelineLogger } from './cv-pipeline.logger';
  * - Lưu raw_text vào DynamoDB (qua UserCvService.updateProcessing)
  */
 import * as mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
 import { createWorker } from 'tesseract.js';
 import { createCanvas } from 'canvas';
 
@@ -40,16 +40,32 @@ function truncateRaw(text: string): string {
   return t.slice(0, MAX_RAW_TEXT_CHARS);
 }
 
-/** Text layer từ PDF (pdf-parse v2: class PDFParse + getText — tương đương nhánh “PDF có text”) */
+/** Text layer từ PDF (pdfjs-dist legacy, đồng bộ với OCR renderer) */
 async function extractPdfTextLayer(buffer: Buffer): Promise<string> {
   if (!buffer?.length) return '';
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
-  try {
-    const result = await parser.getText();
-    return (result?.text || '').trim();
-  } finally {
-    await parser.destroy().catch(() => {});
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const pdfjs: any = require('pdfjs-dist/legacy/build/pdf.js');
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+  });
+  const pdfDoc = await loadingTask.promise;
+  const maxPages = Math.min(pdfDoc.numPages || 0, 50); // safety
+  let out = '';
+  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    const page = await pdfDoc.getPage(pageNum);
+    const content = await page.getTextContent();
+    const items: any[] = content?.items || [];
+    out +=
+      items
+        .map((it) => (typeof it?.str === 'string' ? it.str : ''))
+        .filter(Boolean)
+        .join(' ') + '\n';
+    if (out.length >= MAX_RAW_TEXT_CHARS) break;
   }
+  try {
+    await loadingTask.destroy();
+  } catch {}
+  return out.trim();
 }
 
 function pdfHasSelectableText(text: string): boolean {
@@ -62,14 +78,17 @@ function pdfHasSelectableText(text: string): boolean {
 /** Render trang 1 → PNG → Tesseract (nhánh “không có text / scan”) */
 async function pdfFirstPageToPngBuffer(buffer: Buffer): Promise<Buffer | null> {
   try {
-    const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
-    const { pathToFileURL } = await import('url');
-    const workerPath = require.resolve('pdfjs-dist/build/pdf.worker.mjs');
-    (pdfjs as any).GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
+    // Use pdfjs-dist v3 legacy build (CommonJS) for Node compatibility.
+    // This avoids pdfjs v5 ESM/"exports" issues and API/worker version mismatch.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pdfjs: any = require('pdfjs-dist/legacy/build/pdf.js');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    pdfjs.GlobalWorkerOptions.workerSrc = require.resolve(
+      'pdfjs-dist/legacy/build/pdf.worker.js',
+    );
 
     const loadingTask = (pdfjs as any).getDocument({
       data: new Uint8Array(buffer),
-      useSystemFonts: true,
     });
     const pdfDoc = await loadingTask.promise;
     const page = await pdfDoc.getPage(1);
@@ -81,7 +100,6 @@ async function pdfFirstPageToPngBuffer(buffer: Buffer): Promise<Buffer | null> {
     const renderTask = page.render({
       canvasContext: ctx as any,
       viewport,
-      canvas,
     });
     await renderTask.promise;
     return canvas.toBuffer('image/png');

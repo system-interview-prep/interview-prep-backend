@@ -188,12 +188,21 @@ async function main() {
         const userCv = new UserCvService();
         const L = createPipelineLogger(body.cvId);
         L.error('job:FAILED_FINAL', { receiveCount, message: err });
-        await userCv.updateProcessing({
-          userId: body.userId,
-          cvId: body.cvId,
-          status: 'FAILED',
-          error: `[receiveCount=${receiveCount}] ${err}`,
-        });
+        try {
+          await userCv.updateProcessing({
+            userId: body.userId,
+            cvId: body.cvId,
+            status: 'FAILED',
+            error: `[receiveCount=${receiveCount}] ${err}`,
+          });
+        } catch (persistErr: any) {
+          // Thường gặp: không có bản ghi UserCvs (hoặc thiếu s3_key) — cùng lỗi với job chính.
+          // Không throw: vẫn broadcast + xóa message để worker không crash / không lặp vô hạn.
+          L.warn('job:FAILED_FINAL:dynamo_skip', {
+            reason: persistErr?.name || String(persistErr?.message || persistErr),
+            hint: 'Kiểm tra user_id+cvId trong Dynamo và field s3_key; message SQS có thể stale.',
+          });
+        }
         await broadcast(
           body.cvId,
           { cvId: body.cvId, status: 'FAILED', error: err, receiveCount },
