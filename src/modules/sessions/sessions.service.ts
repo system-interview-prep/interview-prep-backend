@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   DynamoDBClient,
+  GetItemCommand,
   PutItemCommand,
   QueryCommand,
   UpdateItemCommand,
@@ -66,6 +67,24 @@ export class SessionsService {
       started_at: item.started_at?.S || '',
       ended_at: item.ended_at?.S || null,
     }));
+  }
+
+  async getType(params: { userId: string; sessionId: string }): Promise<InterviewSessionType | null> {
+    const data = await this.client.send(
+      new GetItemCommand({
+        TableName: this.tableName,
+        Key: { id: { S: params.sessionId } },
+        ProjectionExpression: 'user_id, #type',
+        ExpressionAttributeNames: { '#type': 'type' },
+      }),
+    );
+    const item = data.Item;
+    if (!item) return null;
+    if (item.user_id?.S !== params.userId) return null;
+    const t = item.type?.S as InterviewSessionType | undefined;
+    if (!t) return null;
+    if (!['Chat', 'Voice', 'Call'].includes(t)) return null;
+    return t;
   }
 
   async close(params: { userId: string; sessionId: string }) {

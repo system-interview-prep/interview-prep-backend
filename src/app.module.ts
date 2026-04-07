@@ -4,7 +4,7 @@ import { Module } from '@nestjs/common';
 import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
-import { InterviewModule } from './modules/interview/interview.module';
+import { VideoCallModule } from './modules/video-call/video-call.module';
 import { SignalingModule } from './modules/signaling/signaling.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { MediaModule } from './modules/media/media.module';
@@ -21,7 +21,7 @@ import { AiUtilsModule } from './modules/ai-utils/ai-utils.module';
     AiUtilsModule,
     AuthModule,
     UserModule,
-    InterviewModule,
+    VideoCallModule,
     SignalingModule,
     ChatModule,
     VoiceModule,

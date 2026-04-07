@@ -81,6 +81,7 @@ export class VoiceService {
     const { audioBase64, mimeType, audioUrl } =
       await this.ai.textToSpeechAndUpload(replyText);
 
+    const assistantCreatedAt = nowISO();
     // save assistant turn to voice table
     await this.client.send(
       new PutItemCommand({
@@ -92,7 +93,7 @@ export class VoiceService {
           type: { S: 'audio' },
           content: { S: replyText },
           audio_url: { S: audioUrl },
-          created_at: { S: nowISO() },
+          created_at: { S: assistantCreatedAt },
         },
       }),
     );
