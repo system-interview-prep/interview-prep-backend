@@ -11,5 +11,10 @@ export const databaseConfig = {
     chat: process.env.DYNAMO_CHAT_TABLE || 'InterviewChats',
     sessions: process.env.DYNAMO_SESSIONS_TABLE || 'InterviewSessions',
     users: process.env.DYNAMO_USERS_TABLE || 'InterviewUsers',
+    jobProfiles: process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles',
+    jobCategories: process.env.DYNAMO_JOB_CATEGORY_TABLE || 'JobCategories',
+    userCvs: process.env.DYNAMO_USER_CV_TABLE || 'UserCvs',
+    /** Empty = atomic dedupe off; set to table name (e.g. UserCvDedupe) when table exists. */
+    userCvDedupe: (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim(),
   },
 };
