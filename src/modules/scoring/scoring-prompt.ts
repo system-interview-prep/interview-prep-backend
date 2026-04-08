@@ -59,6 +59,11 @@ Follow these rules strictly:
 
 9. Be objective, consistent, and explainable. 
 
+9.1. Output length constraints (STRICT):
+   - criteriaBreakdown MUST include at most 12 criteria (pick the most important ones).
+   - Each evidence string MUST be concise (<= 200 characters).
+   - strengths/weaknesses/suggestions: at most 5 items each, each item <= 160 characters.
+
 10. SCORING CALCULATION OWNERSHIP (STRICT):
     - You (the AI) must ONLY provide match and importance for each criterion.
     - You must NOT compute totals.

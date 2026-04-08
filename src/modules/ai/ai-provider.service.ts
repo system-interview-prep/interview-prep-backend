@@ -205,6 +205,7 @@ export class AiProviderService {
   async converseWithSystem(params: {
     systemPrompts: string[];
     userText: string;
+    maxTokens?: number;
   }): Promise<string> {
     const system = (params.systemPrompts || []).filter(Boolean).map((text) => ({ text }));
     const messages = [
@@ -219,6 +220,7 @@ export class AiProviderService {
         modelId: process.env.MODELID || '',
         system,
         messages,
+        inferenceConfig: params.maxTokens ? { maxTokens: params.maxTokens } : undefined,
       }),
     );
     return response.output?.message?.content?.[0]?.text || '';

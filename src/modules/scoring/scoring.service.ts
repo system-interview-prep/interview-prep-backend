@@ -187,8 +187,10 @@ export class ScoringService {
       const extraStrict =
         attempt === 1
           ? ''
-          : `ATTEMPT_${attempt}: Your previous output was NOT valid JSON. Fix it and return ONLY a single JSON object.`;
+          : `ATTEMPT_${attempt}: Your previous output was invalid/truncated JSON. Return ONLY a single complete JSON object with all brackets closed.`;
 
+          console.log('============ attempt=', attempt);
+          
       lastRaw = await this.ai.converseWithSystem({
         systemPrompts: [
           SCORING_SYSTEM_PROMPT,
@@ -197,6 +199,7 @@ export class ScoringService {
           extraStrict,
         ].filter(Boolean),
         userText: JSON.stringify(userPayload),
+        maxTokens: 4096,
       });
 
       const jsonCandidate = extractJsonCandidate(lastRaw);
@@ -228,8 +231,6 @@ export class ScoringService {
     const hardPassed = out.hardFilters?.passed;
     if (hardPassed === false) out.decision = 'FAIL';
 
-
-    console.log('out', out);  
     return out;
   }
 }
