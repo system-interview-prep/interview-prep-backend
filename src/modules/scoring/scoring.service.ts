@@ -2,10 +2,13 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import {
   DynamoDBClient,
   GetItemCommand,
+  PutItemCommand,
+  QueryCommand,
 } from '@aws-sdk/client-dynamodb';
 import { nowISO } from '../../utils';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { SCORING_SYSTEM_PROMPT } from './scoring-prompt';
+import { v4 as uuidv4 } from 'uuid';
 
 function extractJsonCandidate(raw: string): string {
   const trimmed = (raw || '').trim();
@@ -104,6 +107,7 @@ export class ScoringService {
   private client: DynamoDBClient;
   private userCvTable: string;
   private jobProfileTable: string;
+  private scoringHistoryTable: string;
 
   constructor(private readonly ai: AiProviderService) {
     this.client = new DynamoDBClient({
@@ -115,6 +119,49 @@ export class ScoringService {
     });
     this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
     this.jobProfileTable = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
+    this.scoringHistoryTable = process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory';
+  }
+
+  private async tryGetExistingResult(params: {
+    userId: string;
+    candidateId: string;
+    jobId: string;
+  }): Promise<any | null> {
+    let lastKey: Record<string, any> | undefined = undefined;
+    const MAX_PAGES = 6;
+    const PAGE_SIZE = 25;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const data = await this.client.send(
+        new QueryCommand({
+          TableName: this.scoringHistoryTable,
+          IndexName: 'user_id-index',
+          KeyConditionExpression: 'user_id = :uid',
+          FilterExpression: 'candidate_id = :cid AND job_id = :jid',
+          ExpressionAttributeValues: {
+            ':uid': { S: params.userId },
+            ':cid': { S: params.candidateId },
+            ':jid': { S: params.jobId },
+          },
+          ScanIndexForward: false,
+          Limit: PAGE_SIZE,
+          ExclusiveStartKey: lastKey,
+          ProjectionExpression: 'result_json',
+        }),
+      );
+
+      const hit = (data.Items || [])[0];
+      const raw = hit?.result_json?.S;
+      if (raw?.trim()) {
+        const parsed = safeParseJson(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+
+      lastKey = data.LastEvaluatedKey;
+      if (!lastKey) break;
+    }
+
+    return null;
   }
 
   async scoreCvAgainstJobProfile(params: {
@@ -125,6 +172,22 @@ export class ScoringService {
     if (!params.userId?.trim()) throw new BadRequestException('userId missing');
     if (!params.candidateId?.trim()) throw new BadRequestException('candidateId is required');
     if (!params.jobId?.trim()) throw new BadRequestException('jobId is required');
+
+    // If already scored, return previous result (idempotent by user_id + candidate_id + job_id).
+    try {
+      const existing = await this.tryGetExistingResult({
+        userId: params.userId,
+        candidateId: params.candidateId,
+        jobId: params.jobId,
+      });
+      if (existing) {
+        existing.candidateId = params.candidateId;
+        existing.jobId = params.jobId;
+        return existing;
+      }
+    } catch {
+      // ignore (missing table/index, etc.)
+    }
 
     // 1) Load CV structured_data
     const cvRes = await this.client.send(
@@ -188,8 +251,6 @@ export class ScoringService {
         attempt === 1
           ? ''
           : `ATTEMPT_${attempt}: Your previous output was invalid/truncated JSON. Return ONLY a single complete JSON object with all brackets closed.`;
-
-          console.log('============ attempt=', attempt);
           
       lastRaw = await this.ai.converseWithSystem({
         systemPrompts: [
@@ -230,6 +291,31 @@ export class ScoringService {
     // Enforce HARD FILTER outcome from AI if present
     const hardPassed = out.hardFilters?.passed;
     if (hardPassed === false) out.decision = 'FAIL';
+
+    // Persist history (best-effort; do not block response)
+    try {
+      const id = uuidv4();
+      const createdAt = nowISO();
+      await this.client.send(
+        new PutItemCommand({
+          TableName: this.scoringHistoryTable,
+          Item: {
+            id: { S: id },
+            user_id: { S: params.userId },
+            candidate_id: { S: params.candidateId },
+            job_id: { S: params.jobId },
+            pair_key: { S: `${params.candidateId}#${params.jobId}` },
+            decision: { S: String(out.decision || '') },
+            percentage: { N: String(out.score?.percentage ?? 0) },
+            created_at: { S: createdAt },
+            // Keep full result for replay/debug/FE render
+            result_json: { S: JSON.stringify(out) },
+          },
+        }),
+      );
+    } catch {
+      // ignore
+    }
 
     return out;
   }

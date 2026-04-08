@@ -20,6 +20,9 @@ export const databaseConfig = {
     jobProfiles: process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles',
     jobCategories: process.env.DYNAMO_JOB_CATEGORY_TABLE || 'JobCategories',
     userCvs: process.env.DYNAMO_USER_CV_TABLE || 'UserCvs',
+    /** CV↔JP scoring history (each scoring run = 1 item) */
+    scoringHistory:
+      process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory',
     /** Empty = atomic dedupe off; set to table name (e.g. UserCvDedupe) when table exists. */
     userCvDedupe: (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim(),
   },
