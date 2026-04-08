@@ -201,5 +201,27 @@ export class AiProviderService {
       return { error: 'MODEL_OUTPUT_NOT_JSON', raw: text };
     }
   }
+
+  async converseWithSystem(params: {
+    systemPrompts: string[];
+    userText: string;
+  }): Promise<string> {
+    const system = (params.systemPrompts || []).filter(Boolean).map((text) => ({ text }));
+    const messages = [
+      {
+        role: 'user' as ConversationRole,
+        content: [{ text: params.userText || '' }],
+      },
+    ];
+
+    const response = await this.client.send(
+      new ConverseCommand({
+        modelId: process.env.MODELID || '',
+        system,
+        messages,
+      }),
+    );
+    return response.output?.message?.content?.[0]?.text || '';
+  }
 }
 

@@ -14,11 +14,13 @@ import { UserCvModule } from './modules/user-cv/user-cv.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { VoiceModule } from './modules/voice/voice.module';
 import { AiUtilsModule } from './modules/ai-utils/ai-utils.module';
+import { ScoringModule } from './modules/scoring/scoring.module';
 
 @Module({
   imports: [
     AiModule,
     AiUtilsModule,
+    ScoringModule,
     AuthModule,
     UserModule,
     VideoCallModule,
