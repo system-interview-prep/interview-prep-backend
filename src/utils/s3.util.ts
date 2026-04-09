@@ -75,6 +75,19 @@ export class S3Util {
     };
   }
 
+  /** `{baseFolder}/avatars/{userId}/{uuid}.{ext}` */
+  buildAvatarKey(userId: string, mimeType: string): string {
+    const extMap: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/jpg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+    };
+    const ext = extMap[mimeType] || 'jpg';
+    return `${this.baseFolder}/avatars/${userId}/${uuidv4()}.${ext}`;
+  }
+
   buildCvKey(userId: string, cvId: string, filename: string): string {
     const safeFilename = (filename || 'cv')
       .replace(/[/\\]/g, '_')
