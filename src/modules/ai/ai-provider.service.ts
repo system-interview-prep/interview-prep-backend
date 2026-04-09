@@ -34,11 +34,28 @@ export class AiProviderService {
   async converse(params: {
     language: string;
     history: { role: ConversationRole; content: string }[];
+    /** Merged into system when history starts with assistant (Bedrock requires user first). */
+    extraSystemContext?: string;
   }): Promise<string> {
-    const system = [
-      { text: `${SYSTEM_PROMPT}\n\nALL RESPONSES MUST BE IN: ${params.language.toUpperCase()}` },
-    ];
-    const messages = params.history.map((m) => ({
+    const prefix: string[] = [];
+    let i = 0;
+    while (i < params.history.length && params.history[i].role === 'assistant') {
+      prefix.push(params.history[i].content);
+      i++;
+    }
+    const bedrockHistory = params.history.slice(i);
+    const fromLeadingAssistants =
+      prefix.length > 0 ? prefix.join('\n\n') : '';
+    const extra = [params.extraSystemContext?.trim(), fromLeadingAssistants]
+      .filter(Boolean)
+      .join('\n\n');
+
+    let systemText = `${SYSTEM_PROMPT}\n\nALL RESPONSES MUST BE IN: ${params.language.toUpperCase()}`;
+    if (extra) {
+      systemText += `\n\nINTERVIEW CONTEXT (messages already shown to the candidate):\n${extra}`;
+    }
+    const system = [{ text: systemText }];
+    const messages = bedrockHistory.map((m) => ({
       role: m.role,
       content: [{ text: m.content }],
     }));

@@ -21,8 +21,11 @@ export const databaseConfig = {
     jobCategories: process.env.DYNAMO_JOB_CATEGORY_TABLE || 'JobCategories',
     userCvs: process.env.DYNAMO_USER_CV_TABLE || 'UserCvs',
     /** CV↔JP scoring history (each scoring run = 1 item) */
-    scoringHistory:
-      process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory',
+    scoringHistory: process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory',
+    /** Interview question plan (1 per session) */
+    interviewQuestionPlans: process.env.DYNAMO_INTERVIEW_QUESTION_PLANS_TABLE || 'InterviewQuestionPlans',
+    /** Interview questions (many per session) */
+    interviewQuestions: process.env.DYNAMO_INTERVIEW_QUESTIONS_TABLE || 'InterviewQuestions',
     /** Empty = atomic dedupe off; set to table name (e.g. UserCvDedupe) when table exists. */
     userCvDedupe: (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim(),
   },
