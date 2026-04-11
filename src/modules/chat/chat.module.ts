@@ -5,9 +5,10 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { VoiceModule } from '../voice/voice.module';
 import { InterviewQuestionsModule } from '../interview-questions/interview-questions.module';
+import { SessionsModule } from '../sessions/sessions.module';
 
 @Module({
-  imports: [AiModule, VoiceModule, InterviewQuestionsModule],
+  imports: [AiModule, VoiceModule, InterviewQuestionsModule, SessionsModule],
   controllers: [ChatController],
   providers: [ChatGateway, ChatService],
 })

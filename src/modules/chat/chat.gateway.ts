@@ -1,4 +1,5 @@
 import {
+  WsException,
   WebSocketGateway,
   WebSocketServer,
   SubscribeMessage,
@@ -10,6 +11,9 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { VoiceService } from '../voice/voice.service';
+import { JwtService } from '@nestjs/jwt';
+import { SessionsService } from '../sessions/sessions.service';
+import { corsOrigins } from '../../config/cors.config';
 
 interface ChatMessage {
   roomId: string;
@@ -25,15 +29,57 @@ interface ChatMessage {
  * Supports room-based messaging during interview sessions.
  * After each user message, forwards content to VoiceService and relays the reply.
  */
-@WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
+@WebSocketGateway({ namespace: '/chat', cors: { origin: corsOrigins, credentials: true } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer() server: Server;
+  @WebSocketServer() server!: Server;
   private readonly logger = new Logger(ChatGateway.name);
 
-  constructor(private readonly voiceService: VoiceService) {}
+  constructor(
+    private readonly voiceService: VoiceService,
+    private readonly jwtService: JwtService,
+    private readonly sessions: SessionsService,
+  ) {}
 
-  handleConnection(client: Socket) {
-    this.logger.log(`Chat client connected: ${client.id}`);
+  private extractToken(client: Socket): string | null {
+    const authToken = client.handshake.auth?.token;
+    if (typeof authToken === 'string' && authToken.trim()) return authToken.trim();
+    const header = client.handshake.headers?.authorization;
+    if (!header || Array.isArray(header)) return null;
+    const [type, token] = header.split(' ');
+    return type === 'Bearer' && token ? token : null;
+  }
+
+  private async authenticate(client: Socket): Promise<string | null> {
+    const token = this.extractToken(client);
+    if (!token) return null;
+    try {
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: process.env.JWT_SECRET || 'fallback-secret-key-for-dev',
+      });
+      const userId = String(payload?.sub || '').trim();
+      if (!userId) return null;
+      client.data.userId = userId;
+      return userId;
+    } catch {
+      return null;
+    }
+  }
+
+  private async ensureRoomOwnership(client: Socket, roomId: string): Promise<boolean> {
+    const userId = String(client.data?.userId || '').trim();
+    if (!userId || !roomId?.trim()) return false;
+    const type = await this.sessions.getType({ userId, sessionId: roomId.trim() });
+    return type !== null;
+  }
+
+  async handleConnection(client: Socket) {
+    const userId = await this.authenticate(client);
+    if (!userId) {
+      client.emit('auth-error', { message: 'Unauthorized' });
+      client.disconnect(true);
+      return;
+    }
+    this.logger.log(`Chat client connected: ${client.id} userId=${userId}`);
   }
 
   handleDisconnect(client: Socket) {
@@ -41,10 +87,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join-room')
-  handleJoinRoom(
+  async handleJoinRoom(
     @MessageBody() data: { roomId: string; userName: string },
     @ConnectedSocket() client: Socket,
   ) {
+    if (!(await this.ensureRoomOwnership(client, data?.roomId || ''))) {
+      throw new WsException('Forbidden room');
+    }
     client.join(data.roomId);
     client.to(data.roomId).emit('user-joined', { userName: data.userName, socketId: client.id });
     this.logger.log(`${data.userName} joined chat room: ${data.roomId}`);
@@ -55,6 +104,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: ChatMessage,
     @ConnectedSocket() client: Socket,
   ) {
+    if (!(await this.ensureRoomOwnership(client, data?.roomId || ''))) {
+      throw new WsException('Forbidden room');
+    }
     const userMessage: ChatMessage = {
       ...data,
       timestamp: new Date().toISOString(),
@@ -94,10 +146,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('leave-room')
-  handleLeaveRoom(
+  async handleLeaveRoom(
     @MessageBody() data: { roomId: string; userName: string },
     @ConnectedSocket() client: Socket,
   ) {
+    if (!(await this.ensureRoomOwnership(client, data?.roomId || ''))) {
+      throw new WsException('Forbidden room');
+    }
     client.leave(data.roomId);
     client.to(data.roomId).emit('user-left', { userName: data.userName, socketId: client.id });
   }

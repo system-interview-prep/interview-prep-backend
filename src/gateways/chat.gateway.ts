@@ -9,18 +9,48 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { corsOrigins } from '../config/cors.config';
 
 /**
  * Centralized ChatGateway – realtime messaging.
  * Re-exports the logic from modules/chat/chat.gateway.ts.
  */
-@WebSocketGateway({ namespace: '/chat', cors: { origin: '*' } })
+@WebSocketGateway({ namespace: '/chat', cors: { origin: corsOrigins, credentials: true } })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer() server: Server;
+  @WebSocketServer() server!: Server;
   private readonly logger = new Logger(ChatGateway.name);
 
-  handleConnection(client: Socket) {
-    this.logger.log(`[Chat] Client connected: ${client.id}`);
+  constructor(private readonly jwtService: JwtService) {}
+
+  private extractToken(client: Socket): string | null {
+    const authToken = client.handshake.auth?.token;
+    if (typeof authToken === 'string' && authToken.trim()) return authToken.trim();
+    const header = client.handshake.headers?.authorization;
+    if (!header || Array.isArray(header)) return null;
+    const [type, token] = header.split(' ');
+    return type === 'Bearer' && token ? token : null;
+  }
+
+  async handleConnection(client: Socket) {
+    const token = this.extractToken(client);
+    if (!token) {
+      client.emit('auth-error', { message: 'Unauthorized' });
+      client.disconnect(true);
+      return;
+    }
+    try {
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: process.env.JWT_SECRET || 'fallback-secret-key-for-dev',
+      });
+      const userId = String(payload?.sub || '').trim();
+      if (!userId) throw new Error('Missing sub');
+      client.data.userId = userId;
+      this.logger.log(`[Chat] Client connected: ${client.id} userId=${userId}`);
+    } catch {
+      client.emit('auth-error', { message: 'Unauthorized' });
+      client.disconnect(true);
+    }
   }
 
   handleDisconnect(client: Socket) {

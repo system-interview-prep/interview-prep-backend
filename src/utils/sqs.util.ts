@@ -29,7 +29,7 @@ export class SqsUtil {
         QueueUrl: queueUrl,
         WaitTimeSeconds: waitSeconds,
         VisibilityTimeout: visibilityTimeout,
-        MaxNumberOfMessages: 1,
+        MaxNumberOfMessages: 10,
         // request message system attributes (includes ApproximateReceiveCount)
         AttributeNames: ['All'],
       }),

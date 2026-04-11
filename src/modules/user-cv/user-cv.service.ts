@@ -56,7 +56,34 @@ export class UserCvService {
     this.queueUrl = process.env.SQS_CV_QUEUE_URL || '';
   }
 
+  private normalizeStatus(raw: string | undefined, hasError: boolean): CvProcessingStatus {
+    const upper = String(raw || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+
+    if (['DONE', 'SUCCESS', 'COMPLETED'].includes(upper)) return 'DONE';
+    if (
+      [
+        'FAILED',
+        'FAIL',
+        'ERROR',
+        'AI_FAILED',
+        'PARSING_FAILED',
+        'TIMEOUT',
+      ].includes(upper)
+    ) {
+      return 'FAILED';
+    }
+    if (['AI_PROCESSING', 'AI', 'ANALYZING', 'ANALYSIS'].includes(upper)) return 'AI_PROCESSING';
+    if (['PARSING', 'OCR', 'EXTRACTING', 'PROCESSING'].includes(upper)) return 'PARSING';
+    if (['PENDING', 'QUEUED', 'QUEUE'].includes(upper)) return 'PENDING';
+    return hasError ? 'FAILED' : 'PENDING';
+  }
+
   private toDomain(item: Record<string, any>): UserCv {
+    const error = item.error?.S ?? null;
+    const statusRaw = item.status?.S || item.processing_status?.S;
     return {
       id: item.id?.S || '',
       userId: item.user_id?.S || '',
@@ -68,14 +95,14 @@ export class UserCvService {
       url: item.url?.S || '',
       createdAt: item.created_at?.S || '',
       updatedAt: item.updated_at?.S || item.created_at?.S || '',
-      status: (item.status?.S || 'PENDING') as CvProcessingStatus,
+      status: this.normalizeStatus(statusRaw, Boolean(error)),
       score:
         item.score?.N !== undefined
           ? Number(item.score.N) === -1
             ? null
             : Number(item.score.N)
           : null,
-      error: item.error?.S ?? null,
+      error,
       parseSource: item.parse_source?.S ?? null,
       rawText: item.raw_text?.S ?? null,
     };
@@ -87,6 +114,7 @@ export class UserCvService {
         TableName: this.tableName,
         KeyConditionExpression: 'user_id = :uid',
         FilterExpression: 'checksum = :c',
+        ConsistentRead: true,
         ExpressionAttributeValues: {
           ':uid': { S: userId },
           ':c': { S: checksum },
@@ -319,6 +347,7 @@ export class UserCvService {
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: 'user_id = :uid',
+        ConsistentRead: true,
         ExpressionAttributeValues: {
           ':uid': { S: userId },
         },
@@ -337,6 +366,7 @@ export class UserCvService {
     const data = await this.client.send(
       new GetItemCommand({
         TableName: this.tableName,
+        ConsistentRead: true,
         Key: {
           user_id: { S: userId },
           id: { S: id },

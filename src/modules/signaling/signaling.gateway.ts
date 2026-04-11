@@ -9,6 +9,8 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { corsOrigins } from '../../config/cors.config';
 
 /**
  * SignalingGateway – WebRTC signaling relay via Socket.IO.
@@ -19,13 +21,41 @@ import { Logger } from '@nestjs/common';
  *  3. Callee answers → server relays to caller
  *  4. Both exchange ICE candidates via server
  */
-@WebSocketGateway({ namespace: '/signaling', cors: { origin: '*' } })
+@WebSocketGateway({ namespace: '/signaling', cors: { origin: corsOrigins, credentials: true } })
 export class SignalingGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer() server: Server;
+  @WebSocketServer() server!: Server;
   private readonly logger = new Logger(SignalingGateway.name);
 
-  handleConnection(client: Socket) {
-    this.logger.log(`Signaling client connected: ${client.id}`);
+  constructor(private readonly jwtService: JwtService) {}
+
+  private extractToken(client: Socket): string | null {
+    const authToken = client.handshake.auth?.token;
+    if (typeof authToken === 'string' && authToken.trim()) return authToken.trim();
+    const header = client.handshake.headers?.authorization;
+    if (!header || Array.isArray(header)) return null;
+    const [type, token] = header.split(' ');
+    return type === 'Bearer' && token ? token : null;
+  }
+
+  async handleConnection(client: Socket) {
+    const token = this.extractToken(client);
+    if (!token) {
+      client.emit('auth-error', { message: 'Unauthorized' });
+      client.disconnect(true);
+      return;
+    }
+    try {
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: process.env.JWT_SECRET || 'fallback-secret-key-for-dev',
+      });
+      const userId = String(payload?.sub || '').trim();
+      if (!userId) throw new Error('Missing sub');
+      client.data.userId = userId;
+      this.logger.log(`Signaling client connected: ${client.id} userId=${userId}`);
+    } catch {
+      client.emit('auth-error', { message: 'Unauthorized' });
+      client.disconnect(true);
+    }
   }
 
   handleDisconnect(client: Socket) {
