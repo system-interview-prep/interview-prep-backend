@@ -331,7 +331,9 @@ export class AiProviderService {
     if (text.startsWith('{') || text.startsWith('[')) {
       return { error: 'MODEL_OUTPUT_LOOKS_LIKE_JSON', raw };
     }
-    return { description: text };
+    // Ensure we never return markdown headings (#, ##, ###...) to keep UI simple.
+    const sanitized = text.replace(/^\s*#{1,6}\s*/gm, '').trim();
+    return { description: sanitized };
   }
 
   async generateCvJson(rawText: string): Promise<Record<string, any>> {

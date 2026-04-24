@@ -202,8 +202,15 @@ async function processOne(msg: JpQueueMessage) {
     if (!description) {
       const titleFromUi = String((canonicalUi as any)?.title?.value ?? '').trim();
       const title = titleFromUi || msg.filename || 'Job';
-      description = `## ${title}\n\n${String(rawText || '').trim().slice(0, 4000)}`;
+      description =
+        `**Vị trí / Tổng quan**\n` +
+        `- ${title}\n\n` +
+        `**Nội dung JD (trích xuất)**\n` +
+        `${String(rawText || '').trim().slice(0, 4000)}`;
     }
+
+    // Remove markdown headings if model returned them (we store plain Markdown without # headings).
+    description = String(description || '').replace(/^\s*#{1,6}\s*/gm, '').trim();
 
     await setStatus({
       svc,

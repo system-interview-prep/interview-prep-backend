@@ -10,31 +10,35 @@ TASK:
 OUTPUT RULES (STRICT):
 - Output MUST be Markdown text (no JSON).
 - Do NOT wrap in markdown fences (no \`\`\`).
-- Use clear section headings and bullet points.
+- Use clean sections with short labels and bullet points.
+- IMPORTANT: Do NOT use Markdown heading markers (#, ##, ###...).
+- You MAY use bold section titles like **Mô tả công việc**.
 - Do NOT include internal IDs (jobId, uploadId, userId, etc.).
 - Do NOT mention "AI", "Bedrock", "canonical", "extras", or any internal implementation detail.
 - Do NOT hallucinate company-specific details. If something is missing, omit that part.
 - Keep it concise but complete (target ~200-600 words).
 - Language: Vietnamese.
 
-RECOMMENDED STRUCTURE:
-Use this structure with Markdown headings:
-
-## Vị trí / Tổng quan
-
-## Mô tả công việc
+RECOMMENDED STRUCTURE (NO # HEADINGS):
+**Vị trí / Tổng quan**
 - ...
 
-## Yêu cầu
-### Must-have
-- ...
-### Nice-to-have
+**Mô tả công việc**
 - ...
 
-## Kỹ năng / Công nghệ
+**Yêu cầu**
+- Must-have:
+  - ...
+- Nice-to-have:
+  - ...
 
-## Quyền lợi / Thông tin thêm
+**Kỹ năng / Công nghệ**
+- ...
 
-## Quy trình / Cách ứng tuyển
+**Quyền lợi / Thông tin thêm**
+- ...
+
+**Quy trình / Cách ứng tuyển**
+- ...
 `;
 

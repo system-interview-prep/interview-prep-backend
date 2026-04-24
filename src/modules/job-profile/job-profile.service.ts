@@ -180,6 +180,12 @@ async function withTimeout<T>(work: () => Promise<T>, timeoutMs: number): Promis
   });
 }
 
+function stripMarkdownHeadings(input: string): string {
+  const s = String(input || '');
+  // Remove heading markers like "# ", "## ", ... at line start.
+  return s.replace(/^\s*#{1,6}\s*/gm, '').trim();
+}
+
 @Injectable()
 export class JobProfileService {
   private client: DynamoDBClient;
@@ -474,11 +480,12 @@ export class JobProfileService {
     });
 
     // Priority: admin edited (frontend) > worker-generated upload preview > fallback
-    const descriptionText =
+    const descriptionText = stripMarkdownHeadings(
       String(params.description || '').trim() ||
-      String((upload as any).description || '').trim() ||
-      descriptionFallback ||
-      '';
+        String((upload as any).description || '').trim() ||
+        descriptionFallback ||
+        '',
+    );
 
     await this.client.send(
       new UpdateItemCommand({
@@ -534,6 +541,36 @@ export class JobProfileService {
 
     if (!data.Item) throw new NotFoundException('Job profile not found');
     return this.toDomain(data.Item);
+  }
+
+  async updateDescription(params: {
+    userId: string;
+    jobId: string;
+    description: string;
+  }): Promise<void> {
+    const userId = String(params.userId || '').trim();
+    if (!userId) throw new BadRequestException('userId is required');
+    const jobId = String(params.jobId || '').trim();
+    if (!jobId) throw new BadRequestException('jobId is required');
+
+    const updatedAt = nowISO();
+    const description = String(params.description || '').trim();
+
+    await this.client.send(
+      new UpdateItemCommand({
+        TableName: this.tableName,
+        Key: { id: { S: jobId } },
+        ConditionExpression: 'owner_user_id = :uid AND item_type = :type',
+        UpdateExpression: 'SET description = :d, updated_at = :u, updated_at_epoch = :ue',
+        ExpressionAttributeValues: {
+          ':uid': { S: userId },
+          ':type': { S: 'JOBPROFILE' },
+          ':d': { S: description },
+          ':u': { S: updatedAt },
+          ':ue': { N: String(Date.parse(updatedAt)) },
+        },
+      }),
+    );
   }
 
   async remove(id: string): Promise<{ message: string }> {

@@ -113,6 +113,25 @@ export class JobProfileController {
     return this.jobProfileService.getById(id);
   }
 
+  /**
+   * PATCH /admin/job-profiles/:id
+   * Body: { description }
+   */
+  @Patch(':id')
+  async update(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() body: { description?: string | null },
+  ) {
+    const userId = String(req.user?.sub || '').trim();
+    await this.jobProfileService.updateDescription({
+      userId,
+      jobId: id,
+      description: String(body?.description || ''),
+    });
+    return this.jobProfileService.getById(id);
+  }
+
   /** DELETE /admin/job-profiles/:id */
   @Delete(':id')
   async remove(@Param('id') id: string) {
