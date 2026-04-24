@@ -256,6 +256,7 @@ export class JobProfileService {
       status: this.normalizeUploadStatus(statusRaw, Boolean(error)),
       parseSource: item.parse_source?.S ?? null,
       rawText: item.raw_text?.S ?? null,
+      description: item.description?.S ?? null,
       aiProfileUiJson: item.ai_profile_ui_json?.S ?? null,
       aiExtrasJson: item.ai_extras_json?.S ?? null,
       error,
@@ -367,6 +368,7 @@ export class JobProfileService {
     status?: JpUploadStatus;
     rawText?: string | null;
     parseSource?: string | null;
+    description?: string | null;
     aiProfileUiJson?: Record<string, any> | null;
     aiExtrasJson?: Record<string, any> | null;
     error?: string | null;
@@ -388,6 +390,10 @@ export class JobProfileService {
     if (params.parseSource !== undefined) {
       values[':parseSource'] = { S: String(params.parseSource || '') };
       sets.push('parse_source = :parseSource');
+    }
+    if (params.description !== undefined) {
+      values[':description'] = { S: String(params.description || '') };
+      sets.push('description = :description');
     }
     if (params.aiProfileUiJson !== undefined) {
       values[':aiProfileUiJson'] = { S: JSON.stringify(params.aiProfileUiJson || {}) };
@@ -426,6 +432,7 @@ export class JobProfileService {
     categoryId: string;
     keywords?: string[];
     status?: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+    description?: string;
   }): Promise<{ id: string }> {
     const userId = String(params.userId || '').trim();
     if (!userId) throw new BadRequestException('userId is required');
@@ -466,27 +473,12 @@ export class JobProfileService {
       extrasRaw: upload.aiExtrasJson,
     });
 
-    let descriptionText = descriptionFallback;
-    try {
-      const canonicalUiObj = safeParseJson<Record<string, any>>(canonicalUiRaw) || {};
-      const extrasObj = upload.aiExtrasJson
-        ? safeParseJson<Record<string, any>>(String(upload.aiExtrasJson))
-        : null;
-      const aiRes = await withTimeout(
-        () =>
-          this.aiService.generateJobDescriptionFromProfileUi({
-            title,
-            canonicalUi: canonicalUiObj,
-            extras: extrasObj,
-          }),
-        Math.max(3_000, Number(process.env.JP_DESCRIPTION_TIMEOUT_MS || 12_000)),
-      );
-      if ((aiRes as any)?.description && String((aiRes as any).description).trim()) {
-        descriptionText = String((aiRes as any).description).trim();
-      }
-    } catch {
-      // keep fallback
-    }
+    // Priority: admin edited (frontend) > worker-generated upload preview > fallback
+    const descriptionText =
+      String(params.description || '').trim() ||
+      String((upload as any).description || '').trim() ||
+      descriptionFallback ||
+      '';
 
     await this.client.send(
       new UpdateItemCommand({

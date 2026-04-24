@@ -72,6 +72,7 @@ export class JobProfileController {
       categoryId: string;
       keywords?: string[];
       status?: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+      description?: string;
     },
   ) {
     const userId = String(req.user?.sub || '').trim();
@@ -82,6 +83,7 @@ export class JobProfileController {
       categoryId: body?.categoryId,
       keywords: body?.keywords,
       status: body?.status,
+      description: body?.description,
     });
   }
 

@@ -118,6 +118,7 @@ async function setStatus(params: {
     parseSource: string;
     canonicalUi: Record<string, any>;
     extras: Record<string, any>;
+    description: string;
     error: string;
     receiveCount: number;
   }>;
@@ -128,6 +129,7 @@ async function setStatus(params: {
     status: params.status,
     rawText: params.extra?.rawText,
     parseSource: params.extra?.parseSource,
+    description: params.extra?.description,
     aiExtrasJson: params.extra?.extras,
     aiProfileUiJson: params.extra?.canonicalUi,
     error: params.extra?.error,
@@ -178,11 +180,36 @@ async function processOne(msg: JpQueueMessage) {
     }
 
     const { canonicalUi, extras } = res as any;
+
+    // --- Worker 3: Generate candidate-facing description preview ---
+    let description = '';
+    try {
+      const titleFromUi = String((canonicalUi as any)?.title?.value ?? '').trim();
+      const title = titleFromUi || msg.filename || 'Job';
+      const aiDesc = await withAiStepTimeout(() =>
+        ai.generateJobDescriptionFromProfileUi({
+          title,
+          canonicalUi: canonicalUi || {},
+          extras: extras || {},
+        }),
+      );
+      if ((aiDesc as any)?.description && String((aiDesc as any).description).trim()) {
+        description = String((aiDesc as any).description).trim();
+      }
+    } catch {
+      // ignore: keep fallback
+    }
+    if (!description) {
+      const titleFromUi = String((canonicalUi as any)?.title?.value ?? '').trim();
+      const title = titleFromUi || msg.filename || 'Job';
+      description = `## ${title}\n\n${String(rawText || '').trim().slice(0, 4000)}`;
+    }
+
     await setStatus({
       svc,
       msg,
       status: 'DONE',
-      extra: { rawText, parseSource, extras, canonicalUi },
+      extra: { rawText, parseSource, extras, canonicalUi, description },
     });
   }, msg.uploadId);
 }
