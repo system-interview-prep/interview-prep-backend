@@ -9,6 +9,7 @@ import { nowISO } from '../../utils';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { SCORING_SYSTEM_PROMPT } from './scoring-prompt';
 import { v4 as uuidv4 } from 'uuid';
+import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 
 function extractJsonCandidate(raw: string): string {
   const trimmed = (raw || '').trim();
@@ -207,20 +208,21 @@ export class ScoringService {
       throw new BadRequestException('CV structured_data is missing or invalid JSON');
     }
 
-    // 2) Load JP ai_profile_json
+    // 2) Load JP ai_profile_ui_json (labeled) and unwrap to raw for scoring
     const jpRes = await this.client.send(
       new GetItemCommand({
         TableName: this.jobProfileTable,
         Key: { id: { S: params.jobId } },
-        ProjectionExpression: 'id, ai_profile_json, title, description, requirements, keywords',
+        ProjectionExpression: 'id, ai_profile_ui_json, title, keywords',
       }),
     );
     if (!jpRes.Item) throw new NotFoundException('Job profile not found');
-    const aiProfileRaw = jpRes.Item.ai_profile_json?.S || '';
-    const aiProfileJson = safeParseJson(aiProfileRaw);
-    if (!aiProfileJson || typeof aiProfileJson !== 'object') {
-      throw new BadRequestException('JobProfile ai_profile_json is missing or invalid JSON');
+    const aiUiRaw = jpRes.Item.ai_profile_ui_json?.S || '';
+    const aiUiJson = safeParseJson(aiUiRaw);
+    if (!aiUiJson || typeof aiUiJson !== 'object') {
+      throw new BadRequestException('JobProfile ai_profile_ui_json is missing or invalid JSON');
     }
+    const aiProfileJson = unwrapLabeledJson(aiUiJson);
 
     // 3) Ask model to output EXACT schema JSON
     const expectedSchemaHint = {

@@ -16,7 +16,7 @@ export class ScoringController {
   /**
    * POST /ai/score-cv-jp
    * Body: { candidateId, jobId }
-   * Uses UserCvs.structured_data and JobProfiles.ai_profile_json
+   * Uses UserCvs.structured_data and JobProfiles.ai_profile_ui_json (labeled)
    */
   @Post('score-cv-jp')
   @UseGuards(AuthGuard)

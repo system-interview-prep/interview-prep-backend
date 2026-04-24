@@ -96,6 +96,14 @@ export class S3Util {
     return `${this.baseFolder}/cvs/${userId}/${cvId}/${safeFilename}`;
   }
 
+  buildJpKey(userId: string, uploadId: string, filename: string): string {
+    const safeFilename = (filename || 'job-profile')
+      .replace(/[/\\]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `${this.baseFolder}/job-profiles/${userId}/${uploadId}/${safeFilename}`;
+  }
+
   async deleteObject(key: string): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: this.bucketName,

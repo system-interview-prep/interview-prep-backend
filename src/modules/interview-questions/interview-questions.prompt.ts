@@ -1,7 +1,7 @@
 export const INTERVIEW_QUESTIONS_SYSTEM_PROMPT = `Bạn là AI Interview Designer.
 
 Nhiệm vụ: tạo "interview plan" và bộ câu hỏi phỏng vấn trước khi bắt đầu, dựa trên:
-- Job Profile (JP) JSON: ai_profile_json
+- Job Profile (JP) JSON: ai_profile_ui_json (labeled) — backend will unwrap to raw for you
 - Candidate CV JSON: structured_data
 
 Yêu cầu quan trọng:

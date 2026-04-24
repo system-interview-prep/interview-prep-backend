@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -15,11 +16,17 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import 'dotenv/config';
 import { nowISO } from '../../utils';
-import { CreateJobProfileDto } from './dto/create-job-profile.dto';
-import { UpdateJobProfileDto } from './dto/update-job-profile.dto';
-import { JobProfile, ListJobProfilesResult } from './job-profile.types';
+import {
+  JobProfile,
+  JobProfileUpload,
+  JpUploadStatus,
+  ListJobProfilesResult,
+} from './job-profile.types';
 import { JobCategoryService } from '../job-category/job-category.service';
 import { AiProviderService } from '../ai/ai-provider.service';
+import { S3Util } from '../../utils/s3.util';
+import { SqsUtil } from '../../utils/sqs.util';
+import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 
 function normalizeKeyword(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -44,12 +51,144 @@ function decodeCursor(cursor: string): Record<string, any> {
   }
 }
 
+function safeParseJson<T = any>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function asStringOrNull(v: any): string | null {
+  const s = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+  return s ? s : null;
+}
+
+function asStringArray(v: any): string[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((x) => (typeof x === 'string' ? x.trim() : String(x ?? '').trim()))
+    .filter(Boolean);
+}
+
+function section(title: string, lines: string[]): string {
+  const body = (lines || []).map((l) => String(l || '').trim()).filter(Boolean);
+  if (body.length === 0) return '';
+  return [title, ...body.map((l) => `- ${l}`), ''].join('\n');
+}
+
+function buildJdDescriptionText(params: {
+  title: string;
+  canonicalUiRaw: string;
+  extrasRaw?: string | null;
+}): string {
+  const canonicalUi = safeParseJson<Record<string, any>>(params.canonicalUiRaw) || {};
+  const extrasUi = params.extrasRaw ? safeParseJson<Record<string, any>>(params.extrasRaw) : null;
+
+  const canonical = unwrapLabeledJson(canonicalUi) || {};
+  const extras = extrasUi ? unwrapLabeledJson(extrasUi) : {};
+
+  const header: string[] = [];
+  header.push(`Vị trí: ${params.title}`);
+
+  const level = asStringOrNull((canonical as any).level);
+  const seniority = asStringOrNull((canonical as any).seniority);
+  const roleType = asStringOrNull((canonical as any).roleType);
+  const employmentType = asStringOrNull((canonical as any).employmentType);
+  const workModel = asStringOrNull((canonical as any).workModel);
+  const location = asStringOrNull((canonical as any).location);
+  const metaBits = [level, seniority, roleType, employmentType, workModel, location].filter(Boolean);
+  if (metaBits.length) header.push(`Thông tin: ${metaBits.join(' • ')}`);
+
+  const exp = (canonical as any).experience;
+  const minY = exp?.minYears;
+  const maxY = exp?.maxYears;
+  const minOk = typeof minY === 'number' && Number.isFinite(minY);
+  const maxOk = typeof maxY === 'number' && Number.isFinite(maxY);
+  if (minOk && maxOk) header.push(`Kinh nghiệm: ${minY}–${maxY} năm`);
+  else if (minOk) header.push(`Kinh nghiệm: tối thiểu ${minY} năm`);
+  else if (maxOk) header.push(`Kinh nghiệm: tối đa ${maxY} năm`);
+
+  const out: string[] = [];
+  out.push(header.join('\n'), '');
+
+  const responsibilities = asStringArray((canonical as any).responsibilities);
+  const deliverables = asStringArray((canonical as any).deliverables);
+  out.push(section('Mô tả công việc', responsibilities.length ? responsibilities : deliverables));
+
+  const req = (canonical as any).requirements || {};
+  const mustHave = asStringArray(req.mustHave);
+  const niceToHave = asStringArray(req.niceToHave);
+  if (mustHave.length || niceToHave.length) {
+    const lines: string[] = [];
+    if (mustHave.length) {
+      lines.push('- MustHave:');
+      lines.push(...mustHave.map((x) => ` + ${x}`));
+    }
+    if (niceToHave.length) {
+      lines.push('- NiceToHave:');
+      lines.push(...niceToHave.map((x) => ` + ${x}`));
+    }
+    out.push(['Requirements', ...lines, ''].join('\n'));
+  }
+
+  const tech = (canonical as any).techStack || {};
+  const techLines: string[] = [];
+  const langs = asStringArray(tech.languages);
+  const frws = asStringArray(tech.frameworks);
+  const tools = asStringArray(tech.tools);
+  const apis = asStringArray(tech.apis);
+  const plats = asStringArray(tech.platforms);
+  if (langs.length) techLines.push(`Ngôn ngữ: ${langs.join(', ')}`);
+  if (frws.length) techLines.push(`Framework: ${frws.join(', ')}`);
+  if (tools.length) techLines.push(`Tools: ${tools.join(', ')}`);
+  if (apis.length) techLines.push(`APIs: ${apis.join(', ')}`);
+  if (plats.length) techLines.push(`Platforms: ${plats.join(', ')}`);
+  out.push(section('Kỹ năng / Tech stack', techLines));
+
+  out.push(
+    section('Kỹ năng mềm', asStringArray((canonical as any).softSkills)),
+    section('Kiến thức chuyên môn', asStringArray((canonical as any).knowledgeDomains)),
+  );
+
+  // Extras (best-effort as bullets)
+  const extraLines: string[] = [];
+  if (extras && typeof extras === 'object') {
+    for (const [k, v] of Object.entries(extras as any)) {
+      if (v === null || v === undefined) continue;
+      if (typeof v === 'string') {
+        const s = v.trim();
+        if (s) extraLines.push(`${k}: ${s}`);
+      } else if (Array.isArray(v)) {
+        const xs = asStringArray(v);
+        if (xs.length) extraLines.push(`${k}: ${xs.join(', ')}`);
+      }
+    }
+  }
+  out.push(section('Thông tin thêm', extraLines));
+
+  return out.join('\n').trim();
+}
+
+async function withTimeout<T>(work: () => Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`TIMEOUT_${timeoutMs}ms`)), timeoutMs);
+    work()
+      .then((v) => resolve(v))
+      .catch((e) => reject(e))
+      .finally(() => clearTimeout(t));
+  });
+}
+
 @Injectable()
 export class JobProfileService {
   private client: DynamoDBClient;
   private tableName: string;
   private jobCategoryService: JobCategoryService;
   private aiService: AiProviderService;
+  private s3: S3Util;
+  private sqs: SqsUtil;
+  private jpQueueUrl: string;
 
   constructor() {
     this.client = new DynamoDBClient({
@@ -62,6 +201,9 @@ export class JobProfileService {
     this.tableName = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
     this.jobCategoryService = new JobCategoryService();
     this.aiService = new AiProviderService();
+    this.s3 = new S3Util();
+    this.sqs = new SqsUtil();
+    this.jpQueueUrl = process.env.SQS_JP_QUEUE_URL || '';
   }
 
   private toDomain(item: Record<string, any>): JobProfile {
@@ -73,143 +215,319 @@ export class JobProfileService {
       keywords: (item.keywords?.L || []).map((x: any) => x.S).filter(Boolean),
       description: item.description?.S || '',
       requirements: item.requirements?.S || '',
+      aiProfileUiJson: item.ai_profile_ui_json?.S ?? null,
+      aiExtrasJson: item.ai_extras_json?.S ?? null,
+      rawJdText: item.raw_jd_text?.S ?? null,
       status: (item.status?.S || 'ACTIVE') as any,
       createdAt: item.created_at?.S || '',
       updatedAt: item.updated_at?.S || '',
     };
   }
 
-  private buildSearchText(dto: {
-    title: string;
-    categoryId: string;
-    keywords: string[];
-    description?: string;
-    requirements?: string;
-  }): string {
-    const parts = [
-      dto.title,
-      dto.categoryId,
-      ...(dto.keywords || []),
-      dto.description || '',
-      dto.requirements || '',
-    ];
-    return normalizeText(parts.join(' '));
+  // -----------------------------
+  // JP Upload (JD file → rawText → AI canonical+extras)
+  // -----------------------------
+
+  private normalizeUploadStatus(raw: string | undefined, hasError: boolean): JpUploadStatus {
+    const upper = String(raw || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+    if (['DONE', 'SUCCESS', 'COMPLETED'].includes(upper)) return 'DONE';
+    if (['FAILED', 'FAIL', 'ERROR'].includes(upper)) return 'FAILED';
+    if (['AI_PROCESSING', 'AI', 'ANALYZING', 'ANALYSIS'].includes(upper))
+      return 'AI_PROCESSING';
+    if (['PARSING', 'OCR', 'EXTRACTING', 'PROCESSING'].includes(upper)) return 'PARSING';
+    if (['PENDING', 'QUEUED', 'QUEUE'].includes(upper)) return 'PENDING';
+    return hasError ? 'FAILED' : 'PENDING';
   }
 
-  async create(dto: CreateJobProfileDto): Promise<JobProfile> {
-    if (!dto?.title?.trim()) throw new BadRequestException('title is required');
-    if (!dto?.categoryId?.trim()) throw new BadRequestException('categoryId is required');
+  private toUploadDomain(item: Record<string, any>): JobProfileUpload {
+    const error = item.error?.S ?? null;
+    const statusRaw = item.status?.S;
+    return {
+      id: item.id?.S || '',
+      userId: item.owner_user_id?.S || item.user_id?.S || '',
+      filename: item.filename?.S || '',
+      contentType: item.content_type?.S || '',
+      size: Number(item.size?.N || 0),
+      s3Key: item.s3_key?.S || '',
+      url: item.url?.S || '',
+      status: this.normalizeUploadStatus(statusRaw, Boolean(error)),
+      parseSource: item.parse_source?.S ?? null,
+      rawText: item.raw_text?.S ?? null,
+      aiProfileUiJson: item.ai_profile_ui_json?.S ?? null,
+      aiExtrasJson: item.ai_extras_json?.S ?? null,
+      error,
+      createdAt: item.created_at?.S || '',
+      updatedAt: item.updated_at?.S || item.created_at?.S || '',
+    };
+  }
+
+  async uploadJpFile(userId: string, file: Express.Multer.File): Promise<JobProfileUpload> {
+    if (!userId?.trim()) throw new BadRequestException('userId is required');
+    if (!file) throw new BadRequestException('file is required');
+    if (!file.buffer?.length) throw new BadRequestException('file is empty');
 
     const id = uuidv4();
-    const now = nowISO();
-    const createdAtEpoch = Date.parse(now);
+    const createdAt = nowISO();
+    const updatedAt = createdAt;
+    const status: JpUploadStatus = 'PENDING';
 
-    const keywords = (dto.keywords || [])
-      .map(normalizeKeyword)
-      .filter(Boolean)
-      .slice(0, 50);
-
-    const title = dto.title.trim();
-    const categoryId = dto.categoryId.trim();
-    const description = (dto.description || '').trim();
-    const requirements = (dto.requirements || '').trim();
-    const status = (dto.status || 'ACTIVE').toUpperCase();
-
-    if (!['ACTIVE', 'DRAFT', 'ARCHIVED'].includes(status)) {
-      throw new BadRequestException('status must be ACTIVE, DRAFT, or ARCHIVED');
-    }
-
-    const searchText = this.buildSearchText({
-      title,
-      categoryId,
-      keywords,
-      description,
-      requirements,
+    const key = this.s3.buildJpKey(userId, id, file.originalname);
+    const uploaded = await this.s3.uploadBuffer({
+      key,
+      buffer: file.buffer,
+      contentType: file.mimetype,
     });
-
-    // validate category exists
-    await this.jobCategoryService.getById(categoryId);
 
     await this.client.send(
       new PutItemCommand({
         TableName: this.tableName,
         Item: {
           id: { S: id },
-          title: { S: title },
-          category_id: { S: categoryId },
-          keywords: { L: keywords.map((k) => ({ S: k })) },
-          description: { S: description },
-          requirements: { S: requirements },
+          item_type: { S: 'JP_UPLOAD' },
+          owner_user_id: { S: userId },
+          filename: { S: file.originalname || '' },
+          content_type: { S: file.mimetype || 'application/octet-stream' },
+          size: { N: String(file.size || file.buffer.length) },
+          s3_key: { S: uploaded.key },
+          url: { S: uploaded.url },
           status: { S: status },
-          created_at: { S: now },
-          updated_at: { S: now },
-          created_at_epoch: { N: String(createdAtEpoch) },
-          updated_at_epoch: { N: String(createdAtEpoch) },
-
-          // GSI for list/sort by date (all)
-          gsi1pk: { S: 'JOBPROFILE' },
-          // IMPORTANT: the deployed GSI expects String sort key
-          gsi1sk: { S: now },
-
-          // GSI for list/sort by date within category
-          gsi2pk: { S: `CATEGORY#${categoryId}` },
-          // IMPORTANT: the deployed GSI expects String sort key
-          gsi2sk: { S: now },
-
-          // simple search support (Scan + contains)
-          search_text: { S: searchText },
+          created_at: { S: createdAt },
+          updated_at: { S: updatedAt },
         },
       }),
     );
 
-    const created: JobProfile = {
+    const created: JobProfileUpload = {
       id,
-      title,
-      categoryId,
-      keywords,
-      description,
-      requirements,
-      status: status as any,
-      createdAt: now,
-      updatedAt: now,
+      userId,
+      filename: file.originalname || '',
+      contentType: file.mimetype || 'application/octet-stream',
+      size: file.size || file.buffer.length,
+      s3Key: uploaded.key,
+      url: uploaded.url,
+      status,
+      createdAt,
+      updatedAt,
+      error: null,
     };
 
-    // Fire-and-forget AI enrichment: do NOT affect create flow.
-    setImmediate(() => {
-      this.enrichWithAiJson(created).catch(() => {
-        // swallow errors intentionally to keep create path stable
+    if (!this.jpQueueUrl?.trim()) {
+      // not fatal: keeps record for debugging
+      return created;
+    }
+
+    try {
+      await this.sqs.sendJson(this.jpQueueUrl, {
+        userId,
+        uploadId: id,
+        s3Key: uploaded.key,
+        contentType: created.contentType,
+        filename: created.filename,
       });
-    });
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      await this.updateJpUploadProcessing({
+        userId,
+        uploadId: id,
+        error: `enqueue_failed: ${msg}`,
+      });
+      throw new InternalServerErrorException(
+        'JD đã lưu nhưng không gửi được hàng đợi xử lý (SQS).',
+      );
+    }
 
     return created;
   }
 
-  private async enrichWithAiJson(job: JobProfile): Promise<void> {
-    const aiJson = await this.aiService.generateJobProfileJson({
-      jobId: job.id,
-      title: job.title,
-      categoryId: job.categoryId,
-      keywords: job.keywords,
-      description: job.description,
-      requirements: job.requirements,
-      createdAt: job.createdAt,
-    });
+  async getJpUpload(userId: string, uploadId: string): Promise<JobProfileUpload> {
+    if (!userId?.trim()) throw new BadRequestException('userId is required');
+    if (!uploadId?.trim()) throw new BadRequestException('uploadId is required');
 
-    const now = nowISO();
+    const data = await this.client.send(
+      new GetItemCommand({
+        TableName: this.tableName,
+        Key: { id: { S: uploadId } },
+      }),
+    );
+    if (!data.Item) throw new NotFoundException('JP upload not found');
+    const upload = this.toUploadDomain(data.Item);
+    if (upload.userId !== userId) throw new NotFoundException('JP upload not found');
+    if ((data.Item.item_type?.S || '') !== 'JP_UPLOAD') {
+      throw new NotFoundException('JP upload not found');
+    }
+    return upload;
+  }
+
+  async updateJpUploadProcessing(params: {
+    userId: string;
+    uploadId: string;
+    status?: JpUploadStatus;
+    rawText?: string | null;
+    parseSource?: string | null;
+    aiProfileUiJson?: Record<string, any> | null;
+    aiExtrasJson?: Record<string, any> | null;
+    error?: string | null;
+  }): Promise<void> {
+    const updatedAt = nowISO();
+    const names: Record<string, string> = {};
+    const values: Record<string, any> = { ':updatedAt': { S: updatedAt } };
+    const sets: string[] = ['updated_at = :updatedAt'];
+
+    if (params.status) {
+      values[':status'] = { S: params.status };
+      sets.push('#status = :status');
+      names['#status'] = 'status';
+    }
+    if (params.rawText !== undefined) {
+      values[':rawText'] = { S: String(params.rawText || '') };
+      sets.push('raw_text = :rawText');
+    }
+    if (params.parseSource !== undefined) {
+      values[':parseSource'] = { S: String(params.parseSource || '') };
+      sets.push('parse_source = :parseSource');
+    }
+    if (params.aiProfileUiJson !== undefined) {
+      values[':aiProfileUiJson'] = { S: JSON.stringify(params.aiProfileUiJson || {}) };
+      sets.push('ai_profile_ui_json = :aiProfileUiJson');
+    }
+    if (params.aiExtrasJson !== undefined) {
+      values[':aiExtrasJson'] = { S: JSON.stringify(params.aiExtrasJson || {}) };
+      sets.push('ai_extras_json = :aiExtrasJson');
+    }
+    if (params.error !== undefined) {
+      values[':errVal'] = { S: String(params.error || '') };
+      sets.push('#err = :errVal');
+      names['#err'] = 'error';
+    }
+
     await this.client.send(
       new UpdateItemCommand({
         TableName: this.tableName,
-        Key: { id: { S: job.id } },
-        UpdateExpression:
-          'SET ai_profile_json = :aiJson, ai_profile_version = :ver, ai_generated_at = :genAt, updated_at = :updatedAt',
+        Key: { id: { S: params.uploadId } },
+        UpdateExpression: `SET ${sets.join(', ')}`,
+        ConditionExpression: 'owner_user_id = :uid AND item_type = :type',
+        ExpressionAttributeNames: Object.keys(names).length ? names : undefined,
         ExpressionAttributeValues: {
-          ':aiJson': { S: JSON.stringify(aiJson) },
-          ':ver': { S: '1.0' },
-          ':genAt': { S: now },
-          ':updatedAt': { S: now },
+          ...values,
+          ':uid': { S: params.userId },
+          ':type': { S: 'JP_UPLOAD' },
         },
       }),
     );
+  }
+
+  async finalizeUploadToJobProfile(params: {
+    userId: string;
+    uploadId: string;
+    title: string;
+    categoryId: string;
+    keywords?: string[];
+    status?: 'ACTIVE' | 'DRAFT' | 'ARCHIVED';
+  }): Promise<{ id: string }> {
+    const userId = String(params.userId || '').trim();
+    if (!userId) throw new BadRequestException('userId is required');
+    const uploadId = String(params.uploadId || '').trim();
+    if (!uploadId) throw new BadRequestException('uploadId is required');
+
+    const title = String(params.title || '').trim();
+    const categoryId = String(params.categoryId || '').trim();
+    if (!title) throw new BadRequestException('title is required');
+    if (!categoryId) throw new BadRequestException('categoryId is required');
+
+    const upload = await this.getJpUpload(userId, uploadId);
+    if (upload.status !== 'DONE') {
+      throw new BadRequestException('Upload is not DONE yet');
+    }
+    const canonicalUiRaw = String(upload.aiProfileUiJson || '').trim();
+    if (!canonicalUiRaw) throw new BadRequestException('ai_profile_ui_json missing in upload');
+
+    await this.jobCategoryService.getById(categoryId);
+
+    const now = nowISO();
+    const createdAtEpoch = Date.parse(now);
+    const id = uploadId;
+
+    const keywords = (params.keywords || [])
+      .map(normalizeKeyword)
+      .filter(Boolean)
+      .slice(0, 50);
+    const status = (params.status || 'ACTIVE').toUpperCase();
+    if (!['ACTIVE', 'DRAFT', 'ARCHIVED'].includes(status)) {
+      throw new BadRequestException('status must be ACTIVE, DRAFT, or ARCHIVED');
+    }
+
+    const searchText = normalizeText([title, categoryId, ...keywords, upload.rawText || ''].join(' '));
+    const descriptionFallback = buildJdDescriptionText({
+      title,
+      canonicalUiRaw,
+      extrasRaw: upload.aiExtrasJson,
+    });
+
+    let descriptionText = descriptionFallback;
+    try {
+      const canonicalUiObj = safeParseJson<Record<string, any>>(canonicalUiRaw) || {};
+      const extrasObj = upload.aiExtrasJson
+        ? safeParseJson<Record<string, any>>(String(upload.aiExtrasJson))
+        : null;
+      const aiRes = await withTimeout(
+        () =>
+          this.aiService.generateJobDescriptionFromProfileUi({
+            title,
+            canonicalUi: canonicalUiObj,
+            extras: extrasObj,
+          }),
+        Math.max(3_000, Number(process.env.JP_DESCRIPTION_TIMEOUT_MS || 12_000)),
+      );
+      if ((aiRes as any)?.description && String((aiRes as any).description).trim()) {
+        descriptionText = String((aiRes as any).description).trim();
+      }
+    } catch {
+      // keep fallback
+    }
+
+    await this.client.send(
+      new UpdateItemCommand({
+        TableName: this.tableName,
+        Key: { id: { S: id } },
+        ConditionExpression: 'owner_user_id = :uid AND item_type = :type',
+        UpdateExpression:
+          'SET item_type = :jobType, title = :title, category_id = :categoryId, keywords = :keywords, description = :description, requirements = :requirements, #status = :status, created_at = if_not_exists(created_at, :createdAt), updated_at = :updatedAt, created_at_epoch = if_not_exists(created_at_epoch, :createdAtEpoch), updated_at_epoch = :updatedAtEpoch, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk, gsi2pk = :gsi2pk, gsi2sk = :gsi2sk, search_text = :searchText, raw_jd_text = :rawJdText, ai_profile_ui_json = :aiProfileUiJson, ai_profile_version = :aiVer, ai_generated_at = :genAt' +
+          (upload.aiExtrasJson ? ', ai_extras_json = :aiExtrasJson' : ''),
+        ExpressionAttributeNames: {
+          '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+          ':uid': { S: userId },
+          ':type': { S: 'JP_UPLOAD' },
+          ':jobType': { S: 'JOBPROFILE' },
+          ':title': { S: title },
+          ':categoryId': { S: categoryId },
+          ':keywords': { L: keywords.map((k) => ({ S: k })) },
+          ':description': { S: descriptionText || '' },
+          ':requirements': { S: '' },
+          ':status': { S: status },
+          ':createdAt': { S: now },
+          ':updatedAt': { S: now },
+          ':createdAtEpoch': { N: String(createdAtEpoch) },
+          ':updatedAtEpoch': { N: String(createdAtEpoch) },
+          ':gsi1pk': { S: 'JOBPROFILE' },
+          ':gsi1sk': { S: now },
+          ':gsi2pk': { S: `CATEGORY#${categoryId}` },
+          ':gsi2sk': { S: now },
+          ':searchText': { S: searchText },
+          ':rawJdText': { S: String(upload.rawText || '') },
+          ':aiProfileUiJson': { S: canonicalUiRaw },
+          ':aiVer': { S: '1.0' },
+          ':genAt': { S: now },
+          ...(upload.aiExtrasJson ? { ':aiExtrasJson': { S: String(upload.aiExtrasJson) } } : {}),
+        },
+      }),
+    );
+
+    return { id };
   }
 
   async getById(id: string): Promise<JobProfile> {
@@ -224,74 +542,6 @@ export class JobProfileService {
 
     if (!data.Item) throw new NotFoundException('Job profile not found');
     return this.toDomain(data.Item);
-  }
-
-  async update(id: string, dto: UpdateJobProfileDto): Promise<JobProfile> {
-    if (!id?.trim()) throw new BadRequestException('id is required');
-    if (!dto || Object.keys(dto).length === 0) {
-      throw new BadRequestException('update body is required');
-    }
-
-    const existing = await this.getById(id);
-
-    const title = dto.title !== undefined ? dto.title.trim() : existing.title;
-    const categoryId =
-      dto.categoryId !== undefined ? dto.categoryId.trim() : existing.categoryId;
-    const keywords =
-      dto.keywords !== undefined
-        ? dto.keywords.map(normalizeKeyword).filter(Boolean).slice(0, 50)
-        : existing.keywords;
-    const description =
-      dto.description !== undefined ? (dto.description || '').trim() : existing.description;
-    const requirements =
-      dto.requirements !== undefined ? (dto.requirements || '').trim() : existing.requirements;
-    const status =
-      dto.status !== undefined ? String(dto.status).toUpperCase() : existing.status;
-
-    if (!title) throw new BadRequestException('title is required');
-    if (!categoryId) throw new BadRequestException('categoryId is required');
-    if (!['ACTIVE', 'DRAFT', 'ARCHIVED'].includes(status)) {
-      throw new BadRequestException('status must be ACTIVE, DRAFT, or ARCHIVED');
-    }
-
-    const now = nowISO();
-    const updatedAtEpoch = Date.parse(now);
-    const searchText = this.buildSearchText({
-      title,
-      categoryId,
-      keywords,
-      description,
-      requirements,
-    });
-
-    // validate category exists
-    await this.jobCategoryService.getById(categoryId);
-
-    await this.client.send(
-      new UpdateItemCommand({
-        TableName: this.tableName,
-        Key: { id: { S: id } },
-        UpdateExpression:
-          'SET title = :title, category_id = :categoryId, keywords = :keywords, description = :description, requirements = :requirements, #status = :status, updated_at = :updatedAt, updated_at_epoch = :updatedAtEpoch, gsi2pk = :gsi2pk, search_text = :searchText',
-        ExpressionAttributeNames: {
-          '#status': 'status',
-        },
-        ExpressionAttributeValues: {
-          ':title': { S: title },
-          ':categoryId': { S: categoryId },
-          ':keywords': { L: keywords.map((k) => ({ S: k })) },
-          ':description': { S: description },
-          ':requirements': { S: requirements },
-          ':status': { S: status },
-          ':updatedAt': { S: now },
-          ':updatedAtEpoch': { N: String(updatedAtEpoch) },
-          ':gsi2pk': { S: `CATEGORY#${categoryId}` },
-          ':searchText': { S: searchText },
-        },
-      }),
-    );
-
-    return this.getById(id);
   }
 
   async remove(id: string): Promise<{ message: string }> {

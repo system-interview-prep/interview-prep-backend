@@ -12,6 +12,7 @@ import { AiProviderService } from '../ai/ai-provider.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { INTERVIEW_QUESTIONS_SYSTEM_PROMPT } from './interview-questions.prompt';
 import { OPENING_MESSAGE_SYSTEM_PROMPT } from './opening-message.prompt';
+import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 
 function extractJsonCandidate(raw: string): string {
   const trimmed = (raw || '').trim();
@@ -339,19 +340,20 @@ export class InterviewQuestionsService {
       throw new BadRequestException('CV structured_data is missing or invalid JSON');
     }
 
-    // Load JP ai_profile_json
+    // Load JP ai_profile_ui_json (labeled) and unwrap to raw for prompts
     const jpRes = await this.client.send(
       new GetItemCommand({
         TableName: this.jobProfileTable,
         Key: { id: { S: params.jobId } },
-        ProjectionExpression: 'id, ai_profile_json, title',
+        ProjectionExpression: 'id, ai_profile_ui_json, title',
       }),
     );
     if (!jpRes.Item) throw new NotFoundException('Job profile not found');
-    const aiProfileJson = safeParseJson(jpRes.Item.ai_profile_json?.S || '');
-    if (!aiProfileJson || typeof aiProfileJson !== 'object') {
-      throw new BadRequestException('JobProfile ai_profile_json is missing or invalid JSON');
+    const aiUiJson = safeParseJson(jpRes.Item.ai_profile_ui_json?.S || '');
+    if (!aiUiJson || typeof aiUiJson !== 'object') {
+      throw new BadRequestException('JobProfile ai_profile_ui_json is missing or invalid JSON');
     }
+    const aiProfileJson = unwrapLabeledJson(aiUiJson);
 
     const total = Math.min(Math.max(params.totalQuestions ?? 20, 10), 35);
     const language = params.language || 'Vietnamese';

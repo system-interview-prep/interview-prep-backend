@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import axios from 'axios';
-import { AiProviderService } from '../modules/ai/ai-provider.service';
-import { UserCvService } from '../modules/user-cv/user-cv.service';
-import { S3Util } from '../utils/s3.util';
-import { SqsUtil } from '../utils/sqs.util';
-import { CvProcessingStatus } from '../modules/user-cv/user-cv.types';
+import { AiProviderService } from '../../modules/ai/ai-provider.service';
+import { UserCvService } from '../../modules/user-cv/user-cv.service';
+import { S3Util } from '../../utils/s3.util';
+import { SqsUtil } from '../../utils/sqs.util';
+import { CvProcessingStatus } from '../../modules/user-cv/user-cv.types';
 import { guessFileType, worker1ParseCv } from './cv-parse.worker1';
 import { createPipelineLogger } from './cv-pipeline.logger';
 
