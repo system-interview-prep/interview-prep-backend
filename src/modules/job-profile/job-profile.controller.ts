@@ -28,8 +28,7 @@ export class JobProfileController {
     const userId = String(req.user?.sub || '').trim();
     return this.jobProfileService.uploadJpFile(userId, file);
   }
-
-  /** GET /admin/job-profiles/uploads/:id */
+ 
   @Get('uploads/:id')
   async getUpload(@Request() req: any, @Param('id') id: string) {
     const userId = String(req.user?.sub || '').trim();
