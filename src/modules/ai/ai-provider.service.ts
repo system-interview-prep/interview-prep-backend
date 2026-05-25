@@ -9,6 +9,8 @@ import { ElevenLabsUtil } from '../../utils/elevenlabs.util';
 import { S3Util } from '../../utils/s3.util';
 import { SYSTEM_PROMPT } from './system-prompt';
 import { JOB_PROFILE_JSON_SYSTEM_PROMPT } from './job-profile-json-prompt';
+import { JOB_PROFILE_CANONICAL_EXTRAS_SYSTEM_PROMPT } from './job-profile-canonical-extras-prompt';
+import { JOB_PROFILE_DESCRIPTION_SYSTEM_PROMPT } from './job-profile-description-prompt';
 import { CV_JSON_SYSTEM_PROMPT } from './cv-json-prompt';
 import * as dotenv from 'dotenv';
 
@@ -177,6 +179,161 @@ export class AiProviderService {
     } catch {
       return { error: 'MODEL_OUTPUT_NOT_JSON', raw: text };
     }
+  }
+
+  async generateJobProfileCanonicalAndExtras(input: {
+    jobId: string;
+    rawText: string;
+    createdAt?: string;
+  }): Promise<
+    | { canonical: Record<string, any>; canonicalUi: Record<string, any>; extras: Record<string, any> }
+    | { error: string; raw: string }
+  > {
+    const humanizeKey = (key: string): string => {
+      const acronyms = new Set(['id', 'url', 'api', 'cv', 'jd', 'kpi', 'hr']);
+      const s = String(key || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/\s+/g, ' ');
+      return s
+        .split(' ')
+        .filter(Boolean)
+        .map((w) => {
+          const lower = w.toLowerCase();
+          if (acronyms.has(lower)) return lower.toUpperCase();
+          return lower.charAt(0).toUpperCase() + lower.slice(1);
+        })
+        .join(' ');
+    };
+
+    const isLabeled = (v: any): v is { label: any; value: any } =>
+      Boolean(v) && typeof v === 'object' && !Array.isArray(v) && 'label' in v && 'value' in v;
+
+    const wrapLabeled = (key: string, value: any): { label: string; value: any } => ({
+      label: humanizeKey(key),
+      value,
+    });
+
+    // Convert labeled canonical -> raw canonical (schema-only values), and ensure ui object exists.
+    const unwrapCanonical = (node: any, keyForLabel = ''): { raw: any; ui: any } => {
+      // If model already returns labeled node
+      if (isLabeled(node)) {
+        const label = String(node.label || '').trim() || (keyForLabel ? humanizeKey(keyForLabel) : 'Value');
+        const inner = unwrapCanonical(node.value, '');
+        return { raw: inner.raw, ui: { label, value: inner.ui?.value ?? node.value } };
+      }
+      // Plain arrays/primitive: return as-is
+      if (node === null || typeof node !== 'object' || Array.isArray(node)) {
+        return { raw: node, ui: keyForLabel ? { label: humanizeKey(keyForLabel), value: node } : node };
+      }
+      // Object: for each key, unwrap
+      const rawOut: Record<string, any> = {};
+      const uiOut: Record<string, any> = {};
+      for (const [k, v] of Object.entries(node)) {
+        const inner = unwrapCanonical(v, k);
+        rawOut[k] = inner.raw;
+        // ensure each field is labeled in UI form
+        uiOut[k] = isLabeled(inner.ui) ? inner.ui : wrapLabeled(k, inner.ui?.value ?? v);
+      }
+      return { raw: rawOut, ui: uiOut };
+    };
+
+    const normalizeExtras = (extrasRaw: any): Record<string, any> => {
+      const out: Record<string, any> = {};
+      const extrasObj =
+        extrasRaw && typeof extrasRaw === 'object' && !Array.isArray(extrasRaw)
+          ? extrasRaw
+          : {};
+
+      for (const [k, v] of Object.entries(extrasObj)) {
+        if (isLabeled(v)) {
+          const label = String((v as any).label || '').trim() || humanizeKey(k);
+          out[k] = { label, value: (v as any).value };
+        } else {
+          out[k] = { label: humanizeKey(k), value: v as any };
+        }
+      }
+      return out;
+    };
+
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    const payload = {
+      jobId: input.jobId,
+      createdAt: input.createdAt ? input.createdAt.slice(0, 10) : todayUtc,
+      rawText: String(input.rawText || ''),
+    };
+
+    const raw = await this.converseWithSystem({
+      systemPrompts: [
+        JOB_PROFILE_CANONICAL_EXTRAS_SYSTEM_PROMPT,
+        `TODAY_UTC_DATE: ${todayUtc}`,
+      ],
+      userText: JSON.stringify(payload),
+      maxTokens: 4096,
+    });
+
+    const extractJsonCandidate = (text: string): string => {
+      const trimmed = (text || '').trim();
+      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      const candidate = (fenced?.[1] ?? trimmed).trim();
+      const start = candidate.indexOf('{');
+      const end = candidate.lastIndexOf('}');
+      if (start >= 0 && end > start) return candidate.slice(start, end + 1).trim();
+      return candidate;
+    };
+
+    const jsonCandidate = extractJsonCandidate(raw);
+    try {
+      const parsed = JSON.parse(jsonCandidate);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { error: 'MODEL_OUTPUT_NOT_OBJECT', raw };
+      }
+      const canonical = (parsed as any).canonical;
+      const extras = (parsed as any).extras;
+      if (!canonical || typeof canonical !== 'object' || Array.isArray(canonical)) {
+        return { error: 'MODEL_OUTPUT_CANONICAL_MISSING', raw };
+      }
+      const unwrapped = unwrapCanonical(canonical);
+      const normalizedExtras = normalizeExtras(extras);
+      return { canonical: unwrapped.raw, canonicalUi: unwrapped.ui, extras: normalizedExtras };
+    } catch {
+      return { error: 'MODEL_OUTPUT_NOT_JSON', raw };
+    }
+  }
+
+  async generateJobDescriptionFromProfileUi(input: {
+    title: string;
+    canonicalUi: Record<string, any>;
+    extras?: Record<string, any> | null;
+  }): Promise<{ description: string } | { error: string; raw: string }> {
+    const title = String(input.title || '').trim();
+    if (!title) return { error: 'MISSING_TITLE', raw: '' };
+
+    const payload = {
+      title,
+      canonical_ui_json: input.canonicalUi || {},
+      extras_json: input.extras || {},
+    };
+
+    const raw = await this.converseWithSystem({
+      systemPrompts: [
+        JOB_PROFILE_DESCRIPTION_SYSTEM_PROMPT,
+        'Return ONLY Markdown text. Do not include JSON. Do not include markdown fences.',
+      ],
+      userText: JSON.stringify(payload),
+      maxTokens: 1200,
+    });
+
+    const text = String(raw || '').trim();
+    if (!text) return { error: 'MODEL_OUTPUT_EMPTY', raw };
+    // basic guard: if model mistakenly outputs JSON, treat as error
+    if (text.startsWith('{') || text.startsWith('[')) {
+      return { error: 'MODEL_OUTPUT_LOOKS_LIKE_JSON', raw };
+    }
+    // Ensure we never return markdown headings (#, ##, ###...) to keep UI simple.
+    const sanitized = text.replace(/^\s*#{1,6}\s*/gm, '').trim();
+    return { description: sanitized };
   }
 
   async generateCvJson(rawText: string): Promise<Record<string, any>> {

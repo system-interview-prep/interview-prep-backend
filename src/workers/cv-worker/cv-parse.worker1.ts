@@ -20,17 +20,27 @@ const MAX_RAW_TEXT_CHARS = 350_000;
 export type CvParseSource =
   | 'pdf_text_layer'
   | 'pdf_ocr_tesseract'
+  | 'image_ocr_tesseract'
   | 'docx_mammoth'
   | 'unknown';
 
 export function guessFileType(params: {
   contentType?: string;
   filename?: string;
-}): 'pdf' | 'docx' | 'unknown' {
+}): 'pdf' | 'docx' | 'image' | 'unknown' {
   const ct = (params.contentType || '').toLowerCase();
   const fn = (params.filename || '').toLowerCase();
   if (ct.includes('pdf') || fn.endsWith('.pdf')) return 'pdf';
   if (ct.includes('word') || fn.endsWith('.docx')) return 'docx';
+  if (
+    ct.startsWith('image/') ||
+    fn.endsWith('.png') ||
+    fn.endsWith('.jpg') ||
+    fn.endsWith('.jpeg') ||
+    fn.endsWith('.webp')
+  ) {
+    return 'image';
+  }
   return 'unknown';
 }
 
@@ -121,6 +131,17 @@ async function ocrPngBuffer(png: Buffer): Promise<string> {
   }
 }
 
+async function extractTextFromImage(
+  buffer: Buffer,
+  log?: PipelineLogger,
+): Promise<{ rawText: string; parseSource: CvParseSource }> {
+  log?.info('W1:IMAGE:ocr_tesseract', { bytes: buffer.length });
+  const text = await ocrPngBuffer(buffer);
+  const rawText = truncateRaw(text);
+  log?.info('W1:IMAGE:done', { outChars: rawText.length });
+  return { rawText, parseSource: 'image_ocr_tesseract' };
+}
+
 async function extractTextFromPdf(
   buffer: Buffer,
   log?: PipelineLogger,
@@ -177,7 +198,7 @@ async function extractTextFromDocx(
 
 export async function worker1ParseCv(
   buffer: Buffer,
-  fileType: 'pdf' | 'docx' | 'unknown',
+  fileType: 'pdf' | 'docx' | 'image' | 'unknown',
   log?: PipelineLogger,
 ): Promise<{ rawText: string; parseSource: CvParseSource }> {
   if (!buffer?.length) {
@@ -190,6 +211,9 @@ export async function worker1ParseCv(
   }
   if (fileType === 'docx') {
     return extractTextFromDocx(buffer, log);
+  }
+  if (fileType === 'image') {
+    return extractTextFromImage(buffer, log);
   }
   log?.warn('W1:unsupported_type', { fileType });
   return { rawText: '', parseSource: 'unknown' };
