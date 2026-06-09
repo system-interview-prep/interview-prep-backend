@@ -17,6 +17,7 @@ import { nowISO } from '../../utils';
 import { CreateJobCategoryDto } from './dto/create-job-category.dto';
 import { UpdateJobCategoryDto } from './dto/update-job-category.dto';
 import { JobCategory, ListJobCategoriesResult } from './job-category.types';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -43,13 +44,7 @@ export class JobCategoryService {
   private tableName: string;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.tableName = process.env.DYNAMO_JOB_CATEGORY_TABLE || 'JobCategories';
   }
 

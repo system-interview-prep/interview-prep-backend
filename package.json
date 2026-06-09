@@ -7,6 +7,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "build": "nest build",
+    "dynamodb:init": "npm run build && node dist/scripts/init-dynamodb.js",
     "worker:cv": "npm run build && node dist/workers/cv-worker/cv.worker.js",
     "worker:jp": "npm run build && node dist/workers/jp-worker/jp.worker.js"
   },

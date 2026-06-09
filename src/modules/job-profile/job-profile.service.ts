@@ -27,6 +27,7 @@ import { AiProviderService } from '../ai/ai-provider.service';
 import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 
 function normalizeKeyword(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -197,13 +198,7 @@ export class JobProfileService {
   private jpQueueUrl: string;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.tableName = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
     this.jobCategoryService = new JobCategoryService();
     this.aiService = new AiProviderService();

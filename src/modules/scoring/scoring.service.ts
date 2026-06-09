@@ -10,6 +10,7 @@ import {
   PutItemCommand,
   QueryCommand,
 } from '@aws-sdk/client-dynamodb';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 import axios from 'axios';
 import { nowISO } from '../../utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -210,13 +211,7 @@ export class ScoringService {
   private matchingPassThreshold: number;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
     this.jobProfileTable = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
     this.scoringHistoryTable = process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory';

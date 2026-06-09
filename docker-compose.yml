@@ -1,4 +1,47 @@
 services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: interview-dynamodb-local
+    user: root
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb_data:/home/dynamodblocal/data
+    restart: unless-stopped
+
+  dynamodb-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: interview-dynamodb-init
+    env_file:
+      - ./.env
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+    command: ["/bin/sh", "/app/docker/init-dynamodb.sh"]
+    depends_on:
+      - dynamodb-local
+    restart: "no"
+
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: interview-dynamodb-admin
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    ports:
+      - "8001:8001"
+    depends_on:
+      dynamodb-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   postgres-db:
     image: pgvector/pgvector:pg16
     container_name: matching-postgres-db
@@ -37,12 +80,16 @@ services:
     environment:
       API_BASE_URL: http://backend:5000
       CORS_ORIGIN: http://localhost:3000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     ports:
       - "5000:5000"
     depends_on:
-      - resume-matching
+      resume-matching:
+        condition: service_started
+      dynamodb-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   cv-worker:
@@ -54,6 +101,7 @@ services:
       - ./.env
     environment:
       API_BASE_URL: http://backend:5000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     command: ["node", "dist/workers/cv-worker/cv.worker.js"]
@@ -71,6 +119,7 @@ services:
       - ./.env
     environment:
       API_BASE_URL: http://backend:5000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     command: ["node", "dist/workers/jp-worker/jp.worker.js"]
@@ -98,3 +147,4 @@ services:
 
 volumes:
   pgdata:
+  dynamodb_data:

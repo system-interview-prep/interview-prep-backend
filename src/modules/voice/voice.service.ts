@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { nowISO } from '../../utils';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { ConversationRole } from '@aws-sdk/client-bedrock-runtime';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 
 @Injectable()
 export class VoiceService {
@@ -16,13 +17,7 @@ export class VoiceService {
   private chatVoiceTableName: string;
 
   constructor(private readonly ai: AiProviderService) {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.chatTextTableName =
       process.env.DYNAMO_CHAT_TEXT_TABLE || 'InterviewChatText';
     this.chatVoiceTableName =

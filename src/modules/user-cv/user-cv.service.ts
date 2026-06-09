@@ -22,6 +22,7 @@ import { nowISO } from '../../utils';
 import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
 import { CvProcessingStatus, UserCv } from './user-cv.types';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 
 @Injectable()
 export class UserCvService {
@@ -36,13 +37,7 @@ export class UserCvService {
   private queueUrl: string;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.tableName = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
     this.dedupeTableName = (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim();
     this.dedupeEnabled = this.dedupeTableName.length > 0;

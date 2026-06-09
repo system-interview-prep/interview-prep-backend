@@ -13,6 +13,7 @@ import { SessionsService } from '../sessions/sessions.service';
 import { INTERVIEW_QUESTIONS_SYSTEM_PROMPT } from './interview-questions.prompt';
 import { OPENING_MESSAGE_SYSTEM_PROMPT } from './opening-message.prompt';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
 
 function extractJsonCandidate(raw: string): string {
   const trimmed = (raw || '').trim();
@@ -44,13 +45,7 @@ export class InterviewQuestionsService {
     private readonly ai: AiProviderService,
     private readonly sessions: SessionsService,
   ) {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
+    this.client = createDynamoDBClient();
     this.plansTable = process.env.DYNAMO_INTERVIEW_QUESTION_PLANS_TABLE || 'InterviewQuestionPlans';
     this.questionsTable = process.env.DYNAMO_INTERVIEW_QUESTIONS_TABLE || 'InterviewQuestions';
     this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
