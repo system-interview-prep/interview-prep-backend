@@ -14,6 +14,7 @@ import {
   waitUntilTableExists,
 } from '@aws-sdk/client-dynamodb';
 import { createDynamoDBClient } from '../config/dynamodb-client';
+import { databaseConfig } from '../config/database.config';
 
 type Key = {
   name: string;
@@ -34,12 +35,9 @@ type TableDefinition = {
   optional?: boolean;
 };
 
-const env = (name: string, fallback: string): string =>
-  (process.env[name] || '').trim() || fallback;
-
 const tables: TableDefinition[] = [
   {
-    name: env('DYNAMO_SESSIONS_TABLE', 'InterviewSessions'),
+    name: databaseConfig.tables.sessions,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -50,7 +48,7 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: env('DYNAMO_CHAT_TEXT_TABLE', 'InterviewChatText'),
+    name: databaseConfig.tables.chatText,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -61,7 +59,7 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: env('DYNAMO_CHAT_VOICE_TABLE', 'InterviewChatVoice'),
+    name: databaseConfig.tables.chatVoice,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -72,7 +70,7 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: env('DYNAMO_VIDEO_CALL_TABLE', 'InterviewVideoCalls'),
+    name: databaseConfig.tables.videoCalls,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -88,19 +86,15 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    // UserService currently reads DYNAMO_USER_TABLE (singular).
-    name: env(
-      'DYNAMO_USER_TABLE',
-      env('DYNAMO_USERS_TABLE', 'Users'),
-    ),
+    name: databaseConfig.tables.users,
     partitionKey: { name: 'PK' },
   },
   {
-    name: env('DYNAMO_JOB_CATEGORY_TABLE', 'JobCategories'),
+    name: databaseConfig.tables.jobCategories,
     partitionKey: { name: 'id' },
   },
   {
-    name: env('DYNAMO_JOB_PROFILE_TABLE', 'JobProfiles'),
+    name: databaseConfig.tables.jobProfiles,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -116,12 +110,12 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: env('DYNAMO_USER_CV_TABLE', 'UserCvs'),
+    name: databaseConfig.tables.userCvs,
     partitionKey: { name: 'user_id' },
     sortKey: { name: 'id' },
   },
   {
-    name: env('DYNAMO_SCORING_HISTORY_TABLE', 'InterviewScoringHistory'),
+    name: databaseConfig.tables.scoringHistory,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -132,17 +126,11 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: env(
-      'DYNAMO_INTERVIEW_QUESTION_PLANS_TABLE',
-      'InterviewQuestionPlans',
-    ),
+    name: databaseConfig.tables.interviewQuestionPlans,
     partitionKey: { name: 'session_id' },
   },
   {
-    name: env(
-      'DYNAMO_INTERVIEW_QUESTIONS_TABLE',
-      'InterviewQuestions',
-    ),
+    name: databaseConfig.tables.interviewQuestions,
     partitionKey: { name: 'id' },
     indexes: [
       {
@@ -153,7 +141,7 @@ const tables: TableDefinition[] = [
     ],
   },
   {
-    name: (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim(),
+    name: databaseConfig.tables.userCvDedupe,
     partitionKey: { name: 'user_id' },
     sortKey: { name: 'checksum' },
     optional: true,
@@ -295,7 +283,7 @@ async function main(): Promise<void> {
 
   console.log(
     `Ensuring ${activeTables.length} DynamoDB tables in ${
-      process.env.AWS_REGION || 'us-east-1'
+      databaseConfig.region
     }${process.env.DYNAMODB_ENDPOINT ? ` (${process.env.DYNAMODB_ENDPOINT})` : ''}...`,
   );
 

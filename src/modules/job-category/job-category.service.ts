@@ -18,6 +18,7 @@ import { CreateJobCategoryDto } from './dto/create-job-category.dto';
 import { UpdateJobCategoryDto } from './dto/update-job-category.dto';
 import { JobCategory, ListJobCategoriesResult } from './job-category.types';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -45,7 +46,7 @@ export class JobCategoryService {
 
   constructor() {
     this.client = createDynamoDBClient();
-    this.tableName = process.env.DYNAMO_JOB_CATEGORY_TABLE || 'JobCategories';
+    this.tableName = databaseConfig.tables.jobCategories;
   }
 
   private toDomain(item: Record<string, any>): JobCategory {

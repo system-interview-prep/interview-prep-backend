@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { PipelineLogger } from './cv-pipeline.logger';
+import type { PipelineLogger } from '../cv-worker/cv-pipeline.logger';
 
 /**
  * Worker 1: Parse CV (theo sơ đồ)
@@ -17,7 +17,7 @@ const MIN_PDF_TEXT_CHARS = 50;
 /** Tránh vượt quá giới hạn item DynamoDB (~400KB) */
 const MAX_RAW_TEXT_CHARS = 350_000;
 
-export type CvParseSource =
+export type DocumentParseSource =
   | 'pdf_text_layer'
   | 'pdf_ocr_tesseract'
   | 'image_ocr_tesseract'
@@ -134,7 +134,7 @@ async function ocrPngBuffer(png: Buffer): Promise<string> {
 async function extractTextFromImage(
   buffer: Buffer,
   log?: PipelineLogger,
-): Promise<{ rawText: string; parseSource: CvParseSource }> {
+): Promise<{ rawText: string; parseSource: DocumentParseSource }> {
   log?.info('W1:IMAGE:ocr_tesseract', { bytes: buffer.length });
   const text = await ocrPngBuffer(buffer);
   const rawText = truncateRaw(text);
@@ -145,7 +145,7 @@ async function extractTextFromImage(
 async function extractTextFromPdf(
   buffer: Buffer,
   log?: PipelineLogger,
-): Promise<{ rawText: string; parseSource: CvParseSource }> {
+): Promise<{ rawText: string; parseSource: DocumentParseSource }> {
   log?.info('W1:PDF:text_layer', { bytes: buffer.length });
   const layerText = await extractPdfTextLayer(buffer);
   const layerLen = layerText.length;
@@ -175,7 +175,7 @@ async function extractTextFromPdf(
   }
 
   const rawText = truncateRaw(layerText);
-  const parseSource: CvParseSource = layerText ? 'pdf_text_layer' : 'pdf_ocr_tesseract';
+  const parseSource: DocumentParseSource = layerText ? 'pdf_text_layer' : 'pdf_ocr_tesseract';
   log?.warn('W1:PDF:branch', {
     branch: 'fallback_empty_or_weak',
     parseSource,
@@ -187,7 +187,7 @@ async function extractTextFromPdf(
 async function extractTextFromDocx(
   buffer: Buffer,
   log?: PipelineLogger,
-): Promise<{ rawText: string; parseSource: CvParseSource }> {
+): Promise<{ rawText: string; parseSource: DocumentParseSource }> {
   log?.info('W1:DOCX:mammoth', { bytes: buffer.length });
   const res = await mammoth.extractRawText({ buffer });
   const text = (res.value || '').trim();
@@ -196,11 +196,11 @@ async function extractTextFromDocx(
   return { rawText, parseSource: 'docx_mammoth' };
 }
 
-export async function worker1ParseCv(
+export async function parseDocument(
   buffer: Buffer,
   fileType: 'pdf' | 'docx' | 'image' | 'unknown',
   log?: PipelineLogger,
-): Promise<{ rawText: string; parseSource: CvParseSource }> {
+): Promise<{ rawText: string; parseSource: DocumentParseSource }> {
   if (!buffer?.length) {
     log?.warn('W1:input', { reason: 'empty_buffer' });
     return { rawText: '', parseSource: 'unknown' };

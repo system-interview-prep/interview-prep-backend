@@ -11,6 +11,7 @@ import {
   QueryCommand,
 } from '@aws-sdk/client-dynamodb';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 import axios from 'axios';
 import { nowISO } from '../../utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -212,9 +213,9 @@ export class ScoringService {
 
   constructor() {
     this.client = createDynamoDBClient();
-    this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
-    this.jobProfileTable = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
-    this.scoringHistoryTable = process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory';
+    this.userCvTable = databaseConfig.tables.userCvs;
+    this.jobProfileTable = databaseConfig.tables.jobProfiles;
+    this.scoringHistoryTable = databaseConfig.tables.scoringHistory;
     this.matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
     this.matchingServiceTimeoutMs = Math.max(1000, Number(process.env.RESUME_MATCHING_TIMEOUT_MS || 15000));
     this.matchingScoreImportance = Math.max(0, Number(process.env.RESUME_MATCHING_SCORE_IMPORTANCE || 3));

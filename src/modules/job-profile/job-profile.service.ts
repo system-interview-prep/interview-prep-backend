@@ -28,6 +28,7 @@ import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 function normalizeKeyword(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -191,17 +192,20 @@ function stripMarkdownHeadings(input: string): string {
 export class JobProfileService {
   private client: DynamoDBClient;
   private tableName: string;
-  private jobCategoryService: JobCategoryService;
-  private aiService: AiProviderService;
+  private readonly jobCategoryService: JobCategoryService;
+  private readonly aiService: AiProviderService;
   private s3: S3Util;
   private sqs: SqsUtil;
   private jpQueueUrl: string;
 
-  constructor() {
+  constructor(
+    jobCategoryService: JobCategoryService,
+    aiService: AiProviderService,
+  ) {
     this.client = createDynamoDBClient();
-    this.tableName = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
-    this.jobCategoryService = new JobCategoryService();
-    this.aiService = new AiProviderService();
+    this.tableName = databaseConfig.tables.jobProfiles;
+    this.jobCategoryService = jobCategoryService;
+    this.aiService = aiService;
     this.s3 = new S3Util();
     this.sqs = new SqsUtil();
     this.jpQueueUrl = process.env.SQS_JP_QUEUE_URL || '';

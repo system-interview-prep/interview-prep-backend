@@ -9,6 +9,7 @@ import * as dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 import { S3Util } from '../../utils/s3.util';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 dotenv.config();
 
@@ -23,7 +24,7 @@ export class UserService {
   constructor() {
     this.client = createDynamoDBClient();
     // Trỏ đến bảng mới hoặc giữ biến môi trường nếu đã cập nhật .env
-    this.tableName = process.env.DYNAMO_USER_TABLE || 'Users';
+    this.tableName = databaseConfig.tables.users;
     this.s3 = new S3Util();
   }
 

@@ -3,10 +3,11 @@ import { JobProfileController } from './job-profile.controller';
 import { JobProfileService } from './job-profile.service';
 import { JobCategoryModule } from '../job-category/job-category.module';
 import { JobProfileWorkerController } from './job-profile.worker.controller';
-import { JpStatusGateway } from '../../gateways/jp-status.gateway';
+import { JpStatusGateway } from './jp-status.gateway';
+import { AiModule } from '../ai/ai.module';
 
 @Module({
-  imports: [JobCategoryModule],
+  imports: [AiModule, JobCategoryModule],
   controllers: [JobProfileController, JobProfileWorkerController],
   providers: [JobProfileService, JpStatusGateway],
 })

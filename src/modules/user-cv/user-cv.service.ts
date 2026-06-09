@@ -23,6 +23,7 @@ import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
 import { CvProcessingStatus, UserCv } from './user-cv.types';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 @Injectable()
 export class UserCvService {
@@ -38,8 +39,8 @@ export class UserCvService {
 
   constructor() {
     this.client = createDynamoDBClient();
-    this.tableName = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
-    this.dedupeTableName = (process.env.DYNAMO_USER_CV_DEDUPE_TABLE || '').trim();
+    this.tableName = databaseConfig.tables.userCvs;
+    this.dedupeTableName = databaseConfig.tables.userCvDedupe;
     this.dedupeEnabled = this.dedupeTableName.length > 0;
     if (!this.dedupeEnabled) {
       this.logger.log(

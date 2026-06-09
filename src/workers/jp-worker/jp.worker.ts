@@ -2,9 +2,10 @@ import 'dotenv/config';
 import axios from 'axios';
 import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
-import { guessFileType, worker1ParseCv } from '../cv-worker/cv-parse.worker1';
+import { guessFileType, parseDocument } from '../shared/document-parser';
 import { JobProfileService } from '../../modules/job-profile/job-profile.service';
 import { AiProviderService } from '../../modules/ai/ai-provider.service';
+import { JobCategoryService } from '../../modules/job-category/job-category.service';
 import type { JpUploadStatus } from '../../modules/job-profile/job-profile.types';
 
 type JpQueueMessage = {
@@ -142,14 +143,14 @@ async function setStatus(params: {
 
 async function processOne(msg: JpQueueMessage) {
   await withTimeout(async () => {
-    const svc = new JobProfileService();
     const s3 = new S3Util();
     const ai = new AiProviderService();
+    const svc = new JobProfileService(new JobCategoryService(), ai);
 
     // --- Worker 1: Parse raw text from file ---
     const buffer = await s3.getObjectBuffer(msg.s3Key);
     const fileType = guessFileType(msg);
-    const { rawText, parseSource } = await worker1ParseCv(buffer, fileType);
+    const { rawText, parseSource } = await parseDocument(buffer, fileType);
     
     validateRawTextForJd(rawText);
 
@@ -269,7 +270,10 @@ async function main() {
         // best-effort mark failed when we can
         if (body?.userId && body?.uploadId) {
           try {
-            const svc = new JobProfileService();
+            const svc = new JobProfileService(
+              new JobCategoryService(),
+              new AiProviderService(),
+            );
             await svc.updateJpUploadProcessing({
               userId: body.userId,
               uploadId: body.uploadId,

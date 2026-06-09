@@ -5,7 +5,7 @@ import { UserCvService } from '../../modules/user-cv/user-cv.service';
 import { S3Util } from '../../utils/s3.util';
 import { SqsUtil } from '../../utils/sqs.util';
 import { CvProcessingStatus } from '../../modules/user-cv/user-cv.types';
-import { guessFileType, worker1ParseCv } from './cv-parse.worker1';
+import { guessFileType, parseDocument } from '../shared/document-parser';
 import { createPipelineLogger } from './cv-pipeline.logger';
 
 type CvQueueMessage = {
@@ -275,7 +275,7 @@ async function processOne(msg: CvQueueMessage) {
       L.info('W1:detect_type', { fileType });
 
       const { rawText, parseSource } = await L.time('W1:parse', () =>
-        worker1ParseCv(buffer, fileType, L),
+        parseDocument(buffer, fileType, L),
       );
 
       validateRawTextForCv(rawText);

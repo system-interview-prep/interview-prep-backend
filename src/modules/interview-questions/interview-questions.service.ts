@@ -14,6 +14,7 @@ import { INTERVIEW_QUESTIONS_SYSTEM_PROMPT } from './interview-questions.prompt'
 import { OPENING_MESSAGE_SYSTEM_PROMPT } from './opening-message.prompt';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 function extractJsonCandidate(raw: string): string {
   const trimmed = (raw || '').trim();
@@ -46,10 +47,10 @@ export class InterviewQuestionsService {
     private readonly sessions: SessionsService,
   ) {
     this.client = createDynamoDBClient();
-    this.plansTable = process.env.DYNAMO_INTERVIEW_QUESTION_PLANS_TABLE || 'InterviewQuestionPlans';
-    this.questionsTable = process.env.DYNAMO_INTERVIEW_QUESTIONS_TABLE || 'InterviewQuestions';
-    this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
-    this.jobProfileTable = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
+    this.plansTable = databaseConfig.tables.interviewQuestionPlans;
+    this.questionsTable = databaseConfig.tables.interviewQuestions;
+    this.userCvTable = databaseConfig.tables.userCvs;
+    this.jobProfileTable = databaseConfig.tables.jobProfiles;
   }
 
   async getExistingPlan(params: { userId: string; sessionId: string }) {

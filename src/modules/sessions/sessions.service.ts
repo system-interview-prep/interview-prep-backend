@@ -9,6 +9,7 @@ import {
 import { v4 as uuidv4 } from 'uuid';
 import { nowISO } from '../../utils';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 export type InterviewSessionType = 'Chat' | 'Voice' | 'Call';
 
@@ -19,7 +20,7 @@ export class SessionsService {
 
   constructor() {
     this.client = createDynamoDBClient();
-    this.tableName = process.env.DYNAMO_SESSIONS_TABLE || 'InterviewSessions';
+    this.tableName = databaseConfig.tables.sessions;
   }
 
   async create(params: {

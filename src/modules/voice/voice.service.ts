@@ -9,6 +9,7 @@ import { nowISO } from '../../utils';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { ConversationRole } from '@aws-sdk/client-bedrock-runtime';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 @Injectable()
 export class VoiceService {
@@ -18,10 +19,8 @@ export class VoiceService {
 
   constructor(private readonly ai: AiProviderService) {
     this.client = createDynamoDBClient();
-    this.chatTextTableName =
-      process.env.DYNAMO_CHAT_TEXT_TABLE || 'InterviewChatText';
-    this.chatVoiceTableName =
-      process.env.DYNAMO_CHAT_VOICE_TABLE || 'InterviewChatVoice';
+    this.chatTextTableName = databaseConfig.tables.chatText;
+    this.chatVoiceTableName = databaseConfig.tables.chatVoice;
   }
 
   private async getHistoryMerged(sessionId: string) {
