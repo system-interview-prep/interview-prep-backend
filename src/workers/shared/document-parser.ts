@@ -3,7 +3,7 @@ import type { PipelineLogger } from '../cv-worker/cv-pipeline.logger';
 
 /**
  * Worker 1: Parse CV (theo sơ đồ)
- * - Upload S3 + checksum mới → SQS (xử lý ở user-cv.service)
+ * - Upload S3 + checksum mới -> RabbitMQ (xử lý ở user-cv.service)
  * - Worker nhận message → PARSING
  * - PDF: lớp text (pdf-parse, tương đương PyMuPDF extract text) → nếu không đủ text → OCR (Tesseract) sau khi render trang 1 bằng pdf.js + node-canvas
  * - DOCX: mammoth → raw text

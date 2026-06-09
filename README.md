@@ -7,6 +7,7 @@ NestJS backend for interview preparation.
 - Node.js >= 16
 - npm
 - AWS credentials with access to the resources used by the application
+- RabbitMQ 4.x, or Docker Compose
 
 ## Usage
 
@@ -89,3 +90,38 @@ DynamoDB Admin is available at:
 ```text
 http://localhost:8001
 ```
+
+## RabbitMQ queues
+
+RabbitMQ fully replaces AWS SQS for asynchronous CV and job-profile
+processing. Configure local development with:
+
+```env
+RABBITMQ_URL=amqp://interview:interview_password@localhost:5672
+RABBITMQ_CV_QUEUE=cv-processing
+RABBITMQ_JP_QUEUE=jp-processing
+RABBITMQ_RETRY_DELAY_MS=10000
+RABBITMQ_MAX_ATTEMPTS=3
+RABBITMQ_PREFETCH=1
+```
+
+Each processing queue has two companion queues:
+
+- `<queue>.retry` stores failed messages temporarily, then returns them to the
+  processing queue after `RABBITMQ_RETRY_DELAY_MS`.
+- `<queue>.dlq` stores messages that still fail after
+  `RABBITMQ_MAX_ATTEMPTS`.
+
+Queues and messages are durable. Workers use manual acknowledgements, and only
+acknowledge an original message after processing succeeds or after its retry/DLQ
+copy has been confirmed by RabbitMQ.
+
+Docker Compose starts RabbitMQ automatically. Its management interface is:
+
+```text
+http://localhost:15672
+```
+
+The default local credentials are `interview` / `interview_password`. Override
+them with `RABBITMQ_USER` and `RABBITMQ_PASSWORD` before deploying outside local
+development.

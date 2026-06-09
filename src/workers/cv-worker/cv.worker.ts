@@ -3,10 +3,11 @@ import axios from 'axios';
 import { AiProviderService } from '../../modules/ai/ai-provider.service';
 import { UserCvService } from '../../modules/user-cv/user-cv.service';
 import { S3Util } from '../../utils/s3.util';
-import { SqsUtil } from '../../utils/sqs.util';
+import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { CvProcessingStatus } from '../../modules/user-cv/user-cv.types';
 import { guessFileType, parseDocument } from '../shared/document-parser';
 import { createPipelineLogger } from './cv-pipeline.logger';
+import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
 type CvQueueMessage = {
   userId: string;
@@ -173,7 +174,7 @@ async function persistFailedAndBroadcast(params: {
   } catch (persistErr: any) {
     L.warn('job:FAILED_FINAL:dynamo_skip', {
       reason: persistErr?.name || String(persistErr?.message || persistErr),
-      hint: 'Kiểm tra user_id+cvId trong Dynamo và field s3_key; message SQS có thể stale.',
+      hint: 'Kiểm tra user_id+cvId trong Dynamo và field s3_key; message RabbitMQ có thể stale.',
     });
   }
   await broadcast(
@@ -314,68 +315,58 @@ async function processOne(msg: CvQueueMessage) {
 }
 
 async function main() {
-  const queueUrl = process.env.SQS_CV_QUEUE_URL;
-  if (!queueUrl) {
-    console.error(`${QUEUE_TAG} SQS_CV_QUEUE_URL is not configured`);
-    process.exit(1);
-  }
+  const rabbit = new RabbitMqUtil(rabbitMqConfig.queues.cv);
+  console.log(`${QUEUE_TAG} worker started`, {
+    queue: rabbitMqConfig.queues.cv,
+    maxAttempts: rabbitMqConfig.maxAttempts,
+  });
 
-  const sqs = new SqsUtil();
-  console.log(`${QUEUE_TAG} worker started`, { queueUrl });
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const res = await sqs.receive(queueUrl, 20, 180);
-    const messages = res.Messages || [];
-    if (messages.length === 0) continue;
-
-    for (const msg of messages) {
-      const receiptHandle = msg.ReceiptHandle!;
-      const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount || 1);
-
-      let body: CvQueueMessage | null = null;
-      try {
-        body = JSON.parse(msg.Body || '{}');
-        if (!body?.userId || !body?.cvId || !body?.s3Key) {
-          throw new Error('Invalid message body');
-        }
-
-        console.log(`${QUEUE_TAG} message:received`, {
-          cvId: body.cvId,
-          userId: body.userId,
-          receiveCount,
-          s3Key: body.s3Key,
-        });
-
-        await processOne(body);
-
-        console.log(`${QUEUE_TAG} message:deleted`, { cvId: body.cvId });
-        await sqs.delete(queueUrl, receiptHandle);
-      } catch (e: any) {
-        const rawErr = String(e?.message || e);
-        const errCode = String(e?.code || '').trim();
-        const err = errCode || rawErr;
-        const failFast = shouldFailFast(errCode, rawErr);
-        console.error(`${QUEUE_TAG} message:error`, {
-          cvId: body?.cvId,
-          receiveCount,
-          error: err,
-          failFast,
-        });
-
-        if (body?.userId && body?.cvId && (failFast || receiveCount >= 3)) {
-          await persistFailedAndBroadcast({ body, receiveCount, err });
-          await sqs.delete(queueUrl, receiptHandle);
-          console.log(`${QUEUE_TAG} message:deleted_after_fail`, { cvId: body.cvId });
-        } else if (body?.cvId) {
-          console.warn(`${QUEUE_TAG} message:will_retry`, {
-            cvId: body.cvId,
-            receiveCount,
-          });
-        }
+  await rabbit.consumeJson<CvQueueMessage>(async (body, context) => {
+    const { raw, receiveCount } = context;
+    try {
+      if (!body?.userId || !body?.cvId || !body?.s3Key) {
+        throw new Error('Invalid message body');
       }
+
+      console.log(`${QUEUE_TAG} message:received`, {
+        cvId: body.cvId,
+        userId: body.userId,
+        receiveCount,
+        s3Key: body.s3Key,
+      });
+      await processOne(body);
+      console.log(`${QUEUE_TAG} message:acked`, { cvId: body.cvId });
+    } catch (e: any) {
+      const rawErr = String(e?.message || e);
+      const errCode = String(e?.code || '').trim();
+      const err = errCode || rawErr;
+      const failFast = shouldFailFast(errCode, rawErr);
+      const isFinal = failFast || receiveCount >= rabbitMqConfig.maxAttempts;
+
+      console.error(`${QUEUE_TAG} message:error`, {
+        cvId: body?.cvId,
+        receiveCount,
+        error: err,
+        failFast,
+      });
+
+      if (isFinal) {
+        if (body?.userId && body?.cvId) {
+          await persistFailedAndBroadcast({ body, receiveCount, err });
+        }
+        await rabbit.deadLetter(raw, receiveCount, err);
+        console.log(`${QUEUE_TAG} message:dead_lettered`, { cvId: body?.cvId });
+        return;
+      }
+
+      await rabbit.retry(raw, receiveCount, err);
+      console.warn(`${QUEUE_TAG} message:scheduled_retry`, {
+        cvId: body?.cvId,
+        receiveCount,
+        retryDelayMs: rabbitMqConfig.retryDelayMs,
+      });
     }
-  }
+  });
 }
 
 main().catch((e) => {

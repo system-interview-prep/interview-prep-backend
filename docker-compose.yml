@@ -1,4 +1,22 @@
 services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: interview-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-interview}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-interview_password}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   dynamodb-local:
     image: amazon/dynamodb-local:latest
     container_name: interview-dynamodb-local
@@ -81,6 +99,7 @@ services:
       API_BASE_URL: http://backend:5000
       CORS_ORIGIN: http://localhost:3000
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     ports:
@@ -90,6 +109,8 @@ services:
         condition: service_started
       dynamodb-init:
         condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
     restart: unless-stopped
 
   cv-worker:
@@ -102,12 +123,17 @@ services:
     environment:
       API_BASE_URL: http://backend:5000
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     command: ["node", "dist/workers/cv-worker/cv.worker.js"]
     depends_on:
-      - backend
-      - resume-matching
+      backend:
+        condition: service_started
+      resume-matching:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     restart: unless-stopped
 
   jp-worker:
@@ -120,12 +146,17 @@ services:
     environment:
       API_BASE_URL: http://backend:5000
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     command: ["node", "dist/workers/jp-worker/jp.worker.js"]
     depends_on:
-      - backend
-      - resume-matching
+      backend:
+        condition: service_started
+      resume-matching:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -148,3 +179,4 @@ services:
 volumes:
   pgdata:
   dynamodb_data:
+  rabbitmq_data:

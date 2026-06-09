@@ -25,10 +25,11 @@ import {
 import { JobCategoryService } from '../job-category/job-category.service';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { S3Util } from '../../utils/s3.util';
-import { SqsUtil } from '../../utils/sqs.util';
+import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
 import { databaseConfig } from '../../config/database.config';
+import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
 function normalizeKeyword(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -195,8 +196,7 @@ export class JobProfileService {
   private readonly jobCategoryService: JobCategoryService;
   private readonly aiService: AiProviderService;
   private s3: S3Util;
-  private sqs: SqsUtil;
-  private jpQueueUrl: string;
+  private queue: RabbitMqUtil;
 
   constructor(
     jobCategoryService: JobCategoryService,
@@ -207,8 +207,7 @@ export class JobProfileService {
     this.jobCategoryService = jobCategoryService;
     this.aiService = aiService;
     this.s3 = new S3Util();
-    this.sqs = new SqsUtil();
-    this.jpQueueUrl = process.env.SQS_JP_QUEUE_URL || '';
+    this.queue = new RabbitMqUtil(rabbitMqConfig.queues.jobProfile);
   }
 
   private toDomain(item: Record<string, any>): JobProfile {
@@ -320,13 +319,8 @@ export class JobProfileService {
       error: null,
     };
 
-    if (!this.jpQueueUrl?.trim()) {
-      // not fatal: keeps record for debugging
-      return created;
-    }
-
     try {
-      await this.sqs.sendJson(this.jpQueueUrl, {
+      await this.queue.sendJson({
         userId,
         uploadId: id,
         s3Key: uploaded.key,
@@ -341,7 +335,7 @@ export class JobProfileService {
         error: `enqueue_failed: ${msg}`,
       });
       throw new InternalServerErrorException(
-        'JD đã lưu nhưng không gửi được hàng đợi xử lý (SQS).',
+        'JD đã lưu nhưng không gửi được hàng đợi xử lý RabbitMQ.',
       );
     }
 

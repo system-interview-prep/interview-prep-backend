@@ -1,12 +1,13 @@
 import 'dotenv/config';
 import axios from 'axios';
 import { S3Util } from '../../utils/s3.util';
-import { SqsUtil } from '../../utils/sqs.util';
+import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { guessFileType, parseDocument } from '../shared/document-parser';
 import { JobProfileService } from '../../modules/job-profile/job-profile.service';
 import { AiProviderService } from '../../modules/ai/ai-provider.service';
 import { JobCategoryService } from '../../modules/job-category/job-category.service';
 import type { JpUploadStatus } from '../../modules/job-profile/job-profile.types';
+import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
 type JpQueueMessage = {
   userId: string;
@@ -223,80 +224,73 @@ async function processOne(msg: JpQueueMessage) {
 }
 
 async function main() {
-  const queueUrl = process.env.SQS_JP_QUEUE_URL;
-  if (!queueUrl) {
-    console.error(`${QUEUE_TAG} SQS_JP_QUEUE_URL is not configured`);
-    process.exit(1);
-  }
-  const sqs = new SqsUtil();
-  console.log(`${QUEUE_TAG} worker started`, { queueUrl });
+  const rabbit = new RabbitMqUtil(rabbitMqConfig.queues.jobProfile);
+  console.log(`${QUEUE_TAG} worker started`, {
+    queue: rabbitMqConfig.queues.jobProfile,
+    maxAttempts: rabbitMqConfig.maxAttempts,
+  });
 
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const res = await sqs.receive(queueUrl, 20, 180);
-    const messages = res.Messages || [];
-    if (messages.length === 0) continue;
+  await rabbit.consumeJson<JpQueueMessage>(async (body, context) => {
+    const { raw, receiveCount } = context;
+    try {
+      if (!body?.userId || !body?.uploadId || !body?.s3Key) {
+        throw new Error('Invalid message body');
+      }
 
-    for (const msg of messages) {
-      const receiptHandle = msg.ReceiptHandle!;
-      const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount || 1);
+      console.log(`${QUEUE_TAG} message:received`, {
+        uploadId: body.uploadId,
+        userId: body.userId,
+        receiveCount,
+        s3Key: body.s3Key,
+      });
+      await processOne(body);
+      console.log(`${QUEUE_TAG} message:acked`, { uploadId: body.uploadId });
+    } catch (e: any) {
+      const rawErr = String(e?.message || e);
+      const isFinal = receiveCount >= rabbitMqConfig.maxAttempts;
+      console.error(`${QUEUE_TAG} message:error`, {
+        uploadId: body?.uploadId,
+        receiveCount,
+        error: rawErr,
+      });
 
-      let body: JpQueueMessage | null = null;
-      try {
-        body = JSON.parse(msg.Body || '{}');
-        if (!body?.userId || !body?.uploadId || !body?.s3Key) {
-          throw new Error('Invalid message body');
-        }
-
-        console.log(`${QUEUE_TAG} message:received`, {
-          uploadId: body.uploadId,
-          userId: body.userId,
-          receiveCount,
-          s3Key: body.s3Key,
-        });
-
-        await processOne(body);
-
-        console.log(`${QUEUE_TAG} message:deleted`, { uploadId: body.uploadId });
-        await sqs.delete(queueUrl, receiptHandle);
-      } catch (e: any) {
-        const rawErr = String(e?.message || e);
-        console.error(`${QUEUE_TAG} message:error`, {
+      if (!isFinal) {
+        await rabbit.retry(raw, receiveCount, rawErr);
+        console.warn(`${QUEUE_TAG} message:scheduled_retry`, {
           uploadId: body?.uploadId,
           receiveCount,
-          error: rawErr,
+          retryDelayMs: rabbitMqConfig.retryDelayMs,
         });
-
-        // best-effort mark failed when we can
-        if (body?.userId && body?.uploadId) {
-          try {
-            const svc = new JobProfileService(
-              new JobCategoryService(),
-              new AiProviderService(),
-            );
-            await svc.updateJpUploadProcessing({
-              userId: body.userId,
-              uploadId: body.uploadId,
-              status: 'FAILED',
-              error: `[receiveCount=${receiveCount}] ${rawErr}`,
-            });
-            await broadcast(
-              body.uploadId,
-              sanitizeStatusPayload(body.uploadId, 'FAILED', {
-                error: rawErr,
-                receiveCount,
-              }),
-            );
-          } catch {}
-        }
-        // poison control: delete after 3 receives
-        if (receiveCount >= 3) {
-          await sqs.delete(queueUrl, receiptHandle);
-          console.log(`${QUEUE_TAG} message:deleted_after_fail`, { uploadId: body?.uploadId });
-        }
+        return;
       }
+
+      if (body?.userId && body?.uploadId) {
+        try {
+          const svc = new JobProfileService(
+            new JobCategoryService(),
+            new AiProviderService(),
+          );
+          await svc.updateJpUploadProcessing({
+            userId: body.userId,
+            uploadId: body.uploadId,
+            status: 'FAILED',
+            error: `[receiveCount=${receiveCount}] ${rawErr}`,
+          });
+          await broadcast(
+            body.uploadId,
+            sanitizeStatusPayload(body.uploadId, 'FAILED', {
+              error: rawErr,
+              receiveCount,
+            }),
+          );
+        } catch {}
+      }
+      await rabbit.deadLetter(raw, receiveCount, rawErr);
+      console.log(`${QUEUE_TAG} message:dead_lettered`, {
+        uploadId: body?.uploadId,
+      });
     }
-  }
+  });
 }
 
 main().catch((e) => {

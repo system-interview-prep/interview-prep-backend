@@ -20,10 +20,11 @@ import 'dotenv/config';
 import { v4 as uuidv4 } from 'uuid';
 import { nowISO } from '../../utils';
 import { S3Util } from '../../utils/s3.util';
-import { SqsUtil } from '../../utils/sqs.util';
+import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { CvProcessingStatus, UserCv } from './user-cv.types';
 import { createDynamoDBClient } from '../../config/dynamodb-client';
 import { databaseConfig } from '../../config/database.config';
+import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
 @Injectable()
 export class UserCvService {
@@ -34,8 +35,7 @@ export class UserCvService {
   private dedupeTableName: string;
   private readonly dedupeEnabled: boolean;
   private s3: S3Util;
-  private sqs: SqsUtil;
-  private queueUrl: string;
+  private queue: RabbitMqUtil;
 
   constructor() {
     this.client = createDynamoDBClient();
@@ -48,8 +48,7 @@ export class UserCvService {
       );
     }
     this.s3 = new S3Util();
-    this.sqs = new SqsUtil();
-    this.queueUrl = process.env.SQS_CV_QUEUE_URL || '';
+    this.queue = new RabbitMqUtil(rabbitMqConfig.queues.cv);
   }
 
   private normalizeStatus(raw: string | undefined, hasError: boolean): CvProcessingStatus {
@@ -243,33 +242,26 @@ export class UserCvService {
       error: null,
     };
 
-    // Push message to SQS — worker mới chuyển PENDING → PARSING. Nếu không có URL hoặc gửi lỗi, CV sẽ kẹt PENDING.
-    if (!this.queueUrl?.trim()) {
-      this.logger.warn(
-        'SQS_CV_QUEUE_URL is empty: CV will stay PENDING until you set env and run `npm run worker:cv`.',
+    try {
+      await this.queue.sendJson({
+        userId,
+        cvId: id,
+        s3Key: uploaded.key,
+        contentType: created.contentType,
+        filename: created.filename,
+      });
+      this.logger.log(`CV ${id} enqueued to RabbitMQ for user ${userId}`);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      this.logger.error(`RabbitMQ publish failed for CV ${id}: ${msg}`);
+      await this.updateProcessing({
+        userId,
+        cvId: id,
+        error: `enqueue_failed: ${msg}`,
+      });
+      throw new InternalServerErrorException(
+        'CV đã lưu nhưng không gửi được hàng đợi xử lý RabbitMQ.',
       );
-    } else {
-      try {
-        await this.sqs.sendJson(this.queueUrl, {
-          userId,
-          cvId: id,
-          s3Key: uploaded.key,
-          contentType: created.contentType,
-          filename: created.filename,
-        });
-        this.logger.log(`CV ${id} enqueued to SQS for user ${userId}`);
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        this.logger.error(`SQS SendMessage failed for CV ${id}: ${msg}`);
-        await this.updateProcessing({
-          userId,
-          cvId: id,
-          error: `enqueue_failed: ${msg}`,
-        });
-        throw new InternalServerErrorException(
-          'CV đã lưu nhưng không gửi được hàng đợi xử lý (SQS). Kiểm tra IAM sqs:SendMessage và SQS_CV_QUEUE_URL.',
-        );
-      }
     }
 
     return created;
@@ -319,7 +311,7 @@ export class UserCvService {
     }
 
     // Chỉ update bản ghi đã tạo từ upload (có s3_key). Tránh UpdateItem tạo "ghost row"
-    // khi user_id/cvId lệch hoặc message SQS cũ — DynamoDB sẽ tạo item mới chỉ với field SET.
+    // khi user_id/cvId lệch hoặc message RabbitMQ cũ.
     await this.client.send(
       new UpdateItemCommand({
         TableName: this.tableName,
