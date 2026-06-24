@@ -23,7 +23,6 @@ import {
   ListJobProfilesResult,
 } from './job-profile.types';
 import { JobCategoryService } from '../job-category/job-category.service';
-import { AiProviderService } from '../ai/ai-provider.service';
 import { S3Util } from '../../utils/s3.util';
 import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
@@ -194,18 +193,13 @@ export class JobProfileService {
   private client: DynamoDBClient;
   private tableName: string;
   private readonly jobCategoryService: JobCategoryService;
-  private readonly aiService: AiProviderService;
   private s3: S3Util;
   private queue: RabbitMqUtil;
 
-  constructor(
-    jobCategoryService: JobCategoryService,
-    aiService: AiProviderService,
-  ) {
+  constructor(jobCategoryService: JobCategoryService) {
     this.client = createDynamoDBClient();
     this.tableName = databaseConfig.tables.jobProfiles;
     this.jobCategoryService = jobCategoryService;
-    this.aiService = aiService;
     this.s3 = new S3Util();
     this.queue = new RabbitMqUtil(rabbitMqConfig.queues.jobProfile);
   }

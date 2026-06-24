@@ -7,7 +7,6 @@ import { UserModule } from './modules/user/user.module';
 import { VideoCallModule } from './modules/video-call/video-call.module';
 import { SignalingModule } from './modules/signaling/signaling.module';
 import { ChatModule } from './modules/chat/chat.module';
-import { MediaModule } from './modules/media/media.module';
 import { JobProfileModule } from './modules/job-profile/job-profile.module';
 import { JobCategoryModule } from './modules/job-category/job-category.module';
 import { UserCvModule } from './modules/user-cv/user-cv.module';
@@ -30,7 +29,6 @@ import { InterviewQuestionsModule } from './modules/interview-questions/intervie
     ChatModule,
     VoiceModule,
     SessionsModule,
-    MediaModule,
     JobCategoryModule,
     JobProfileModule,
     UserCvModule,

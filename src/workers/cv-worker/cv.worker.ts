@@ -53,7 +53,6 @@ function sanitizeStatusPayload(
   status: CvProcessingStatus,
   extra?: Partial<{
     parseSource: string;
-    score: number;
     error: string;
     receiveCount: number;
   }>,
@@ -62,7 +61,6 @@ function sanitizeStatusPayload(
     cvId,
     status,
     ...(extra?.parseSource ? { parseSource: extra.parseSource } : {}),
-    ...(extra?.score !== undefined ? { score: extra.score } : {}),
     ...(extra?.error ? { error: extra.error } : {}),
     ...(extra?.receiveCount !== undefined ? { receiveCount: extra.receiveCount } : {}),
     updatedAt: new Date().toISOString(),
@@ -222,7 +220,6 @@ async function setStatus(
     rawText: string;
     parseSource: string;
     structuredData: any;
-    score: number;
     error: string;
   }>,
 ) {
@@ -231,7 +228,6 @@ async function setStatus(
     meta.rawTextChars = String(extra.rawText).length;
   }
   if (extra?.parseSource) meta.parseSource = extra.parseSource;
-  if (extra?.score !== undefined) meta.score = extra.score;
   if (extra?.structuredData) meta.structuredDataKeys = Object.keys(extra.structuredData || {}).length;
 
   L.info('dynamo:update', meta);
@@ -243,14 +239,13 @@ async function setStatus(
     rawText: extra?.rawText,
     parseSource: extra?.parseSource,
     structuredData: extra?.structuredData,
-    score: extra?.score,
     error: extra?.error,
   });
   await broadcast(msg.cvId, sanitizeStatusPayload(msg.cvId, status, extra), L);
 }
 
 /**
- * Pipeline: W1 parse → W2 AI JSON → W3 score heuristic → DONE (câu hỏi phỏng vấn lưu bảng khác sau)
+ * Pipeline: W1 parse -> W2 AI JSON -> DONE.
  */
 async function processOne(msg: CvQueueMessage) {
   const L = createPipelineLogger(msg.cvId);
@@ -293,21 +288,15 @@ async function processOne(msg: CvQueueMessage) {
       );
       ensureStructuredDataValid(structuredData);
 
-      const blob = JSON.stringify(structuredData || {});
-      const score = Math.min(
-        100,
-        Math.max(0, Math.round((blob.length ? Math.min(blob.length, 5000) / 5000 : 0) * 100)),
-      );
-      L.info('W3:match_score', { score, jsonBlobChars: blob.length });
-
       await setStatus(userCv, msg, 'DONE', L, {
-        score,
         structuredData,
         rawText,
         parseSource,
       });
 
-      L.info('job:DONE', { score });
+      L.info('job:DONE', {
+        structuredDataKeys: Object.keys(structuredData).length,
+      });
     },
     msg.cvId,
     L,

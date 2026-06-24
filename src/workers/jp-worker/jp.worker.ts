@@ -146,7 +146,7 @@ async function processOne(msg: JpQueueMessage) {
   await withTimeout(async () => {
     const s3 = new S3Util();
     const ai = new AiProviderService();
-    const svc = new JobProfileService(new JobCategoryService(), ai);
+    const svc = new JobProfileService(new JobCategoryService());
 
     // --- Worker 1: Parse raw text from file ---
     const buffer = await s3.getObjectBuffer(msg.s3Key);
@@ -266,10 +266,7 @@ async function main() {
 
       if (body?.userId && body?.uploadId) {
         try {
-          const svc = new JobProfileService(
-            new JobCategoryService(),
-            new AiProviderService(),
-          );
+          const svc = new JobProfileService(new JobCategoryService());
           await svc.updateJpUploadProcessing({
             userId: body.userId,
             uploadId: body.uploadId,

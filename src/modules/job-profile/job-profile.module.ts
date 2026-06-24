@@ -4,10 +4,9 @@ import { JobProfileService } from './job-profile.service';
 import { JobCategoryModule } from '../job-category/job-category.module';
 import { JobProfileWorkerController } from './job-profile.worker.controller';
 import { JpStatusGateway } from './jp-status.gateway';
-import { AiModule } from '../ai/ai.module';
 
 @Module({
-  imports: [AiModule, JobCategoryModule],
+  imports: [JobCategoryModule],
   controllers: [JobProfileController, JobProfileWorkerController],
   providers: [JobProfileService, JpStatusGateway],
 })
