@@ -82,8 +82,12 @@ services:
       - ../interview-resume-matching-service/.env
     environment:
       DATABASE_URL: postgresql://user:password@postgres-db:5432/matching_db
+      FLASK_ENV: development
     ports:
       - "5001:5001"
+    volumes:
+      - ../interview-resume-matching-service:/app
+    command: ["python", "app.py"]
     depends_on:
       - postgres-db
     restart: unless-stopped
@@ -92,6 +96,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: deps
     container_name: interview-prep-backend
     env_file:
       - ./.env
@@ -104,6 +109,10 @@ services:
       RESUME_MATCHING_TIMEOUT_MS: "120000"
     ports:
       - "5000:5000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run start:dev
     depends_on:
       resume-matching:
         condition: service_started
@@ -117,6 +126,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: deps
     container_name: interview-prep-cv-worker
     env_file:
       - ./.env
@@ -126,7 +136,10 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
-    command: ["node", "dist/workers/cv-worker/cv.worker.js"]
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--watch", "dist/workers/cv-worker/cv.worker.js"]
     depends_on:
       backend:
         condition: service_started
@@ -140,6 +153,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: deps
     container_name: interview-prep-jp-worker
     env_file:
       - ./.env
@@ -149,7 +163,10 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
       RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
       RESUME_MATCHING_TIMEOUT_MS: "120000"
-    command: ["node", "dist/workers/jp-worker/jp.worker.js"]
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--watch", "dist/workers/jp-worker/jp.worker.js"]
     depends_on:
       backend:
         condition: service_started
@@ -163,6 +180,7 @@ services:
     build:
       context: ../interview-prep-frontend
       dockerfile: Dockerfile
+      target: deps
       args:
         NEXT_PUBLIC_API_URL: http://localhost:5000
         NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
@@ -170,8 +188,13 @@ services:
     container_name: interview-prep-frontend
     env_file:
       - ../interview-prep-frontend/.env
+    volumes:
+      - ../interview-prep-frontend:/app
+      - /app/node_modules
+      - /app/.next
     ports:
       - "3000:3000"
+    command: npm run dev
     depends_on:
       - backend
     restart: unless-stopped
