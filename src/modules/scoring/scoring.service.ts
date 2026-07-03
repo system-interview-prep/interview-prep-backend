@@ -242,9 +242,6 @@ export class ScoringService {
         `${this.matchingServiceUrl}/api/process-resumes`,
         {
           cvs: [params.candidateText?.trim() || params.candidateCv],
-          jobDescription: params.jobText?.trim() || undefined,
-          job: params.jobText?.trim() ? undefined : params.jobProfile,
-          requirements: params.requirements,
           methods: this.matchingMethods,
           position: 'general',
           metadata: {

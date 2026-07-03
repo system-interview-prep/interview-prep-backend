@@ -15,6 +15,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import 'dotenv/config';
+import axios from 'axios';
 import { nowISO } from '../../utils';
 import {
   JobProfile,
@@ -513,6 +514,38 @@ export class JobProfileService {
       }),
     );
 
+    // Call vectorized matching service in the background (best effort, fire-and-forget)
+    try {
+      const aiUiJson = safeParseJson(canonicalUiRaw);
+      const aiProfileJson = aiUiJson ? unwrapLabeledJson(aiUiJson) : {};
+      const aiExtrasUi = safeParseJson(upload.aiExtrasJson || '{}');
+      const aiExtrasJson = aiExtrasUi ? unwrapLabeledJson(aiExtrasUi) : {};
+      const structuredRequirements = mergeStructuredJobRequirements(
+        extractStructuredJobRequirements(aiExtrasJson),
+        extractStructuredJobRequirements(aiProfileJson),
+      );
+
+      const jpRawText = [
+        buildStructuredJobHints(structuredRequirements),
+        upload.rawText,
+        descriptionText,
+        '', // requirements is stored as ''
+      ]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+        .join('\n\n');
+
+      const matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
+      axios.post(`${matchingServiceUrl}/api/v1/jd/vectorize`, {
+        job_id: id,
+        job_text: jpRawText,
+      }).catch((err) => {
+        console.error(`[JobProfileService] Failed to trigger background JD vectorize for job_id=${id}:`, err.message);
+      });
+    } catch (e) {
+      console.error(`[JobProfileService] Error constructing JD vectorize payload for job_id=${id}:`, e.message);
+    }
+
     return { id };
   }
 
@@ -558,6 +591,47 @@ export class JobProfileService {
         },
       }),
     );
+
+    // Call vectorize in the background to update cache
+    try {
+      const data = await this.client.send(
+        new GetItemCommand({
+          TableName: this.tableName,
+          Key: { id: { S: jobId } },
+          ProjectionExpression: 'ai_profile_ui_json, ai_extras_json, raw_jd_text',
+        }),
+      );
+      if (data.Item) {
+        const canonicalUiRaw = data.Item.ai_profile_ui_json?.S || '';
+        const aiUiJson = safeParseJson(canonicalUiRaw);
+        const aiProfileJson = aiUiJson ? unwrapLabeledJson(aiUiJson) : {};
+        const aiExtrasUi = safeParseJson(data.Item.ai_extras_json?.S || '{}');
+        const aiExtrasJson = aiExtrasUi ? unwrapLabeledJson(aiExtrasUi) : {};
+        const structuredRequirements = mergeStructuredJobRequirements(
+          extractStructuredJobRequirements(aiExtrasJson),
+          extractStructuredJobRequirements(aiProfileJson),
+        );
+        const jpRawText = [
+          buildStructuredJobHints(structuredRequirements),
+          data.Item.raw_jd_text?.S || '',
+          description,
+          '',
+        ]
+          .map((x) => String(x || '').trim())
+          .filter(Boolean)
+          .join('\n\n');
+
+        const matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
+        axios.post(`${matchingServiceUrl}/api/v1/jd/vectorize`, {
+          job_id: jobId,
+          job_text: jpRawText,
+        }).catch((err) => {
+          console.error(`[JobProfileService] Failed to trigger background JD vectorize in updateDescription for job_id=${jobId}:`, err.message);
+        });
+      }
+    } catch (e) {
+      console.error(`[JobProfileService] Error triggering JD vectorize in updateDescription for job_id=${jobId}:`, e.message);
+    }
   }
 
   async remove(id: string): Promise<{ message: string }> {
@@ -640,5 +714,93 @@ export class JobProfileService {
       nextCursor: data.LastEvaluatedKey ? encodeCursor(data.LastEvaluatedKey) : undefined,
     };
   }
+}
+
+// ===== HELPER FUNCTIONS FOR BACKGROUND JD VECTORIZE =====
+
+function stringsFromUnknown(value: any): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((x) => (typeof x === 'string' ? x : JSON.stringify(x)))
+      .map((x) => String(x || '').trim())
+      .filter(Boolean);
+  }
+  if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
+  if (typeof value === 'object') {
+    return Object.values(value)
+      .flatMap((x) => stringsFromUnknown(x))
+      .filter(Boolean);
+  }
+  return [];
+}
+
+type StructuredJobRequirements = {
+  mustHave: string[];
+  niceToHave: string[];
+  constraints: string[];
+};
+
+function extractStructuredJobRequirements(jobProfile: Record<string, any> | null | undefined): StructuredJobRequirements {
+  const source = jobProfile || {};
+  const directMustHave = source.mustHave ?? source.must_have ?? source.haveMust ?? source.have_must;
+  const directNiceToHave = source.niceToHave ?? source.nice_to_have ?? source.preferred;
+  const requirements = jobProfile?.requirements;
+  const requirementsValue =
+    requirements && typeof requirements === 'object' && 'value' in requirements
+      ? requirements.value
+      : requirements;
+  const mustHave = stringsFromUnknown(
+    directMustHave ??
+      (requirementsValue && typeof requirementsValue === 'object'
+        ? requirementsValue.mustHave ??
+          requirementsValue.must_have ??
+          requirementsValue.haveMust ??
+          requirementsValue.have_must ??
+          requirementsValue.required
+        : []),
+  );
+  const niceToHave = stringsFromUnknown(
+    directNiceToHave ??
+      (requirementsValue && typeof requirementsValue === 'object'
+        ? requirementsValue.niceToHave ?? requirementsValue.nice_to_have ?? requirementsValue.preferred
+        : []),
+  );
+  const constraintsRaw = source.constraints;
+  const constraintsValue =
+    constraintsRaw && typeof constraintsRaw === 'object' && 'value' in constraintsRaw
+      ? constraintsRaw.value
+      : constraintsRaw;
+  const constraints = stringsFromUnknown(constraintsValue);
+
+  return {
+    mustHave: Array.from(new Set(mustHave)),
+    niceToHave: Array.from(new Set(niceToHave)),
+    constraints: Array.from(new Set(constraints)),
+  };
+}
+
+function mergeStructuredJobRequirements(
+  ...items: Array<StructuredJobRequirements | null | undefined>
+): StructuredJobRequirements {
+  return {
+    mustHave: Array.from(new Set(items.flatMap((x) => x?.mustHave || []))),
+    niceToHave: Array.from(new Set(items.flatMap((x) => x?.niceToHave || []))),
+    constraints: Array.from(new Set(items.flatMap((x) => x?.constraints || []))),
+  };
+}
+
+function buildStructuredJobHints(requirements: StructuredJobRequirements): string {
+  const parts: string[] = [];
+  if (requirements.mustHave.length) {
+    parts.push(`MUST HAVE\n${requirements.mustHave.map((x) => `- ${x}`).join('\n')}`);
+  }
+  if (requirements.niceToHave.length) {
+    parts.push(`NICE TO HAVE\n${requirements.niceToHave.map((x) => `- ${x}`).join('\n')}`);
+  }
+  if (requirements.constraints.length) {
+    parts.push(`CONSTRAINTS\n${requirements.constraints.map((x) => `- ${x}`).join('\n')}`);
+  }
+  return parts.join('\n\n');
 }
 
