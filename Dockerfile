@@ -42,6 +42,8 @@ COPY --from=build /app/package*.json ./
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/eng.traineddata ./eng.traineddata
 COPY --from=build /app/vie.traineddata ./vie.traineddata
+COPY docker ./docker
+RUN chmod +x ./docker/init-dynamodb.sh
 
 EXPOSE 5000
 CMD ["node", "dist/main.js"]

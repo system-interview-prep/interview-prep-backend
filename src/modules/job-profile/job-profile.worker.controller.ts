@@ -1,5 +1,5 @@
 import { Body, Controller, Headers, Post } from '@nestjs/common';
-import { JpStatusGateway } from '../../gateways/jp-status.gateway';
+import { JpStatusGateway } from './jp-status.gateway';
 
 @Controller('internal/jp-events')
 export class JobProfileWorkerController {

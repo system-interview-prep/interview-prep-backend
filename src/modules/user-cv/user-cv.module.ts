@@ -3,7 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { UserCvController } from './user-cv.controller';
 import { UserCvService } from './user-cv.service';
 import { UserCvWorkerController } from './user-cv.worker.controller';
-import { CvStatusGateway } from '../../gateways/cv-status.gateway';
+import { CvStatusGateway } from './cv-status.gateway';
 
 @Module({
   imports: [AuthModule],
@@ -11,4 +11,3 @@ import { CvStatusGateway } from '../../gateways/cv-status.gateway';
   providers: [UserCvService, CvStatusGateway],
 })
 export class UserCvModule {}
-

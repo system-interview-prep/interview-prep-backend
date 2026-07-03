@@ -3,10 +3,11 @@ import axios from 'axios';
 import { AiProviderService } from '../../modules/ai/ai-provider.service';
 import { UserCvService } from '../../modules/user-cv/user-cv.service';
 import { S3Util } from '../../utils/s3.util';
-import { SqsUtil } from '../../utils/sqs.util';
+import { RabbitMqUtil } from '../../utils/rabbitmq.util';
 import { CvProcessingStatus } from '../../modules/user-cv/user-cv.types';
-import { guessFileType, worker1ParseCv } from './cv-parse.worker1';
+import { guessFileType, parseDocument } from '../shared/document-parser';
 import { createPipelineLogger } from './cv-pipeline.logger';
+import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
 type CvQueueMessage = {
   userId: string;
@@ -52,7 +53,6 @@ function sanitizeStatusPayload(
   status: CvProcessingStatus,
   extra?: Partial<{
     parseSource: string;
-    score: number;
     error: string;
     receiveCount: number;
   }>,
@@ -61,7 +61,6 @@ function sanitizeStatusPayload(
     cvId,
     status,
     ...(extra?.parseSource ? { parseSource: extra.parseSource } : {}),
-    ...(extra?.score !== undefined ? { score: extra.score } : {}),
     ...(extra?.error ? { error: extra.error } : {}),
     ...(extra?.receiveCount !== undefined ? { receiveCount: extra.receiveCount } : {}),
     updatedAt: new Date().toISOString(),
@@ -173,7 +172,7 @@ async function persistFailedAndBroadcast(params: {
   } catch (persistErr: any) {
     L.warn('job:FAILED_FINAL:dynamo_skip', {
       reason: persistErr?.name || String(persistErr?.message || persistErr),
-      hint: 'Kiểm tra user_id+cvId trong Dynamo và field s3_key; message SQS có thể stale.',
+      hint: 'Kiểm tra user_id+cvId trong Dynamo và field s3_key; message RabbitMQ có thể stale.',
     });
   }
   await broadcast(
@@ -221,7 +220,6 @@ async function setStatus(
     rawText: string;
     parseSource: string;
     structuredData: any;
-    score: number;
     error: string;
   }>,
 ) {
@@ -230,7 +228,6 @@ async function setStatus(
     meta.rawTextChars = String(extra.rawText).length;
   }
   if (extra?.parseSource) meta.parseSource = extra.parseSource;
-  if (extra?.score !== undefined) meta.score = extra.score;
   if (extra?.structuredData) meta.structuredDataKeys = Object.keys(extra.structuredData || {}).length;
 
   L.info('dynamo:update', meta);
@@ -242,14 +239,13 @@ async function setStatus(
     rawText: extra?.rawText,
     parseSource: extra?.parseSource,
     structuredData: extra?.structuredData,
-    score: extra?.score,
     error: extra?.error,
   });
   await broadcast(msg.cvId, sanitizeStatusPayload(msg.cvId, status, extra), L);
 }
 
 /**
- * Pipeline: W1 parse → W2 AI JSON → W3 score heuristic → DONE (câu hỏi phỏng vấn lưu bảng khác sau)
+ * Pipeline: W1 parse -> W2 AI JSON -> DONE.
  */
 async function processOne(msg: CvQueueMessage) {
   const L = createPipelineLogger(msg.cvId);
@@ -275,7 +271,7 @@ async function processOne(msg: CvQueueMessage) {
       L.info('W1:detect_type', { fileType });
 
       const { rawText, parseSource } = await L.time('W1:parse', () =>
-        worker1ParseCv(buffer, fileType, L),
+        parseDocument(buffer, fileType, L),
       );
 
       validateRawTextForCv(rawText);
@@ -292,21 +288,15 @@ async function processOne(msg: CvQueueMessage) {
       );
       ensureStructuredDataValid(structuredData);
 
-      const blob = JSON.stringify(structuredData || {});
-      const score = Math.min(
-        100,
-        Math.max(0, Math.round((blob.length ? Math.min(blob.length, 5000) / 5000 : 0) * 100)),
-      );
-      L.info('W3:match_score', { score, jsonBlobChars: blob.length });
-
       await setStatus(userCv, msg, 'DONE', L, {
-        score,
         structuredData,
         rawText,
         parseSource,
       });
 
-      L.info('job:DONE', { score });
+      L.info('job:DONE', {
+        structuredDataKeys: Object.keys(structuredData).length,
+      });
     },
     msg.cvId,
     L,
@@ -314,68 +304,58 @@ async function processOne(msg: CvQueueMessage) {
 }
 
 async function main() {
-  const queueUrl = process.env.SQS_CV_QUEUE_URL;
-  if (!queueUrl) {
-    console.error(`${QUEUE_TAG} SQS_CV_QUEUE_URL is not configured`);
-    process.exit(1);
-  }
+  const rabbit = new RabbitMqUtil(rabbitMqConfig.queues.cv);
+  console.log(`${QUEUE_TAG} worker started`, {
+    queue: rabbitMqConfig.queues.cv,
+    maxAttempts: rabbitMqConfig.maxAttempts,
+  });
 
-  const sqs = new SqsUtil();
-  console.log(`${QUEUE_TAG} worker started`, { queueUrl });
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const res = await sqs.receive(queueUrl, 20, 180);
-    const messages = res.Messages || [];
-    if (messages.length === 0) continue;
-
-    for (const msg of messages) {
-      const receiptHandle = msg.ReceiptHandle!;
-      const receiveCount = Number(msg.Attributes?.ApproximateReceiveCount || 1);
-
-      let body: CvQueueMessage | null = null;
-      try {
-        body = JSON.parse(msg.Body || '{}');
-        if (!body?.userId || !body?.cvId || !body?.s3Key) {
-          throw new Error('Invalid message body');
-        }
-
-        console.log(`${QUEUE_TAG} message:received`, {
-          cvId: body.cvId,
-          userId: body.userId,
-          receiveCount,
-          s3Key: body.s3Key,
-        });
-
-        await processOne(body);
-
-        console.log(`${QUEUE_TAG} message:deleted`, { cvId: body.cvId });
-        await sqs.delete(queueUrl, receiptHandle);
-      } catch (e: any) {
-        const rawErr = String(e?.message || e);
-        const errCode = String(e?.code || '').trim();
-        const err = errCode || rawErr;
-        const failFast = shouldFailFast(errCode, rawErr);
-        console.error(`${QUEUE_TAG} message:error`, {
-          cvId: body?.cvId,
-          receiveCount,
-          error: err,
-          failFast,
-        });
-
-        if (body?.userId && body?.cvId && (failFast || receiveCount >= 3)) {
-          await persistFailedAndBroadcast({ body, receiveCount, err });
-          await sqs.delete(queueUrl, receiptHandle);
-          console.log(`${QUEUE_TAG} message:deleted_after_fail`, { cvId: body.cvId });
-        } else if (body?.cvId) {
-          console.warn(`${QUEUE_TAG} message:will_retry`, {
-            cvId: body.cvId,
-            receiveCount,
-          });
-        }
+  await rabbit.consumeJson<CvQueueMessage>(async (body, context) => {
+    const { raw, receiveCount } = context;
+    try {
+      if (!body?.userId || !body?.cvId || !body?.s3Key) {
+        throw new Error('Invalid message body');
       }
+
+      console.log(`${QUEUE_TAG} message:received`, {
+        cvId: body.cvId,
+        userId: body.userId,
+        receiveCount,
+        s3Key: body.s3Key,
+      });
+      await processOne(body);
+      console.log(`${QUEUE_TAG} message:acked`, { cvId: body.cvId });
+    } catch (e: any) {
+      const rawErr = String(e?.message || e);
+      const errCode = String(e?.code || '').trim();
+      const err = errCode || rawErr;
+      const failFast = shouldFailFast(errCode, rawErr);
+      const isFinal = failFast || receiveCount >= rabbitMqConfig.maxAttempts;
+
+      console.error(`${QUEUE_TAG} message:error`, {
+        cvId: body?.cvId,
+        receiveCount,
+        error: err,
+        failFast,
+      });
+
+      if (isFinal) {
+        if (body?.userId && body?.cvId) {
+          await persistFailedAndBroadcast({ body, receiveCount, err });
+        }
+        await rabbit.deadLetter(raw, receiveCount, err);
+        console.log(`${QUEUE_TAG} message:dead_lettered`, { cvId: body?.cvId });
+        return;
+      }
+
+      await rabbit.retry(raw, receiveCount, err);
+      console.warn(`${QUEUE_TAG} message:scheduled_retry`, {
+        cvId: body?.cvId,
+        receiveCount,
+        retryDelayMs: rabbitMqConfig.retryDelayMs,
+      });
     }
-  }
+  });
 }
 
 main().catch((e) => {
