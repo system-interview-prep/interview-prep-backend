@@ -8,6 +8,8 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { v4 as uuidv4 } from 'uuid';
 import { nowISO } from '../../utils';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 /**
  * Bản ghi phiên video call (WebRTC room / Simli) — tách khỏi chat text/voice.
@@ -19,14 +21,8 @@ export class VideoCallService {
   private tableName: string;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
-    this.tableName = process.env.DYNAMO_VIDEO_CALL_TABLE || 'InterviewVideoCalls';
+    this.client = createDynamoDBClient();
+    this.tableName = databaseConfig.tables.videoCalls;
   }
 
   async start(params: {

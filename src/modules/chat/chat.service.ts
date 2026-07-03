@@ -11,6 +11,8 @@ import { ConversationRole } from '@aws-sdk/client-bedrock-runtime';
 import { InterviewQuestionsService } from '../interview-questions/interview-questions.service';
 import { CHAT_QUESTION_ADVANCE_SYSTEM_PROMPT } from './chat-question-advance.prompt';
 import { NEXT_QUESTION_TRANSITION_SYSTEM_PROMPT } from './chat-next-question-transition.prompt';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 
 function safeParseJson(raw: string): any | null {
   try {
@@ -88,17 +90,9 @@ export class ChatService {
     private readonly ai: AiProviderService,
     private readonly interviewQuestions: InterviewQuestionsService,
   ) {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
-    this.chatTextTableName =
-      process.env.DYNAMO_CHAT_TEXT_TABLE || 'InterviewChatText';
-    this.chatVoiceTableName =
-      process.env.DYNAMO_CHAT_VOICE_TABLE || 'InterviewChatVoice';
+    this.client = createDynamoDBClient();
+    this.chatTextTableName = databaseConfig.tables.chatText;
+    this.chatVoiceTableName = databaseConfig.tables.chatVoice;
   }
 
   async saveTextTurn(params: {

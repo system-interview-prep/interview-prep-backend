@@ -1,5 +1,5 @@
 import { Body, Controller, Headers, Post } from '@nestjs/common';
-import { CvStatusGateway } from '../../gateways/cv-status.gateway';
+import { CvStatusGateway } from './cv-status.gateway';
 
 @Controller('internal/cv-events')
 export class UserCvWorkerController {

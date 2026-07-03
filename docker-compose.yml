@@ -1,0 +1,205 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: interview-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-interview}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-interview_password}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: interview-dynamodb-local
+    user: root
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - dynamodb_data:/home/dynamodblocal/data
+    restart: unless-stopped
+
+  dynamodb-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: interview-dynamodb-init
+    env_file:
+      - ./.env
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+    command: ["/bin/sh", "/app/docker/init-dynamodb.sh"]
+    depends_on:
+      - dynamodb-local
+    restart: "no"
+
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: interview-dynamodb-admin
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    ports:
+      - "8001:8001"
+    depends_on:
+      dynamodb-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  postgres-db:
+    image: pgvector/pgvector:pg16
+    container_name: matching-postgres-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: matching_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  resume-matching:
+    build:
+      context: ../interview-resume-matching-service
+      dockerfile: Dockerfile
+    container_name: interview-resume-matching
+    env_file:
+      - ../interview-resume-matching-service/.env
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres-db:5432/matching_db
+      FLASK_ENV: development
+    ports:
+      - "5001:5001"
+    volumes:
+      - ../interview-resume-matching-service:/app
+    command: ["python", "app.py"]
+    depends_on:
+      - postgres-db
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    container_name: interview-prep-backend
+    env_file:
+      - ./.env
+    environment:
+      API_BASE_URL: http://backend:5000
+      CORS_ORIGIN: http://localhost:3000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
+      RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
+      RESUME_MATCHING_TIMEOUT_MS: "120000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run start:dev
+    depends_on:
+      resume-matching:
+        condition: service_started
+      dynamodb-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cv-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    container_name: interview-prep-cv-worker
+    env_file:
+      - ./.env
+    environment:
+      API_BASE_URL: http://backend:5000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
+      RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
+      RESUME_MATCHING_TIMEOUT_MS: "120000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--watch", "dist/workers/cv-worker/cv.worker.js"]
+    depends_on:
+      backend:
+        condition: service_started
+      resume-matching:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  jp-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps
+    container_name: interview-prep-jp-worker
+    env_file:
+      - ./.env
+    environment:
+      API_BASE_URL: http://backend:5000
+      DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-interview}:${RABBITMQ_PASSWORD:-interview_password}@rabbitmq:5672
+      RESUME_MATCHING_SERVICE_URL: http://resume-matching:5001
+      RESUME_MATCHING_TIMEOUT_MS: "120000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["node", "--watch", "dist/workers/jp-worker/jp.worker.js"]
+    depends_on:
+      backend:
+        condition: service_started
+      resume-matching:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../interview-prep-frontend
+      dockerfile: Dockerfile
+      target: deps
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:5000
+        NEXT_PUBLIC_SOCKET_URL: http://localhost:5000
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-309332258875-63ekd74cfui5k3kb90na1r34i7e402o9.apps.googleusercontent.com}
+    container_name: interview-prep-frontend
+    env_file:
+      - ../interview-prep-frontend/.env
+    volumes:
+      - ../interview-prep-frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    command: npm run dev
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  dynamodb_data:
+  rabbitmq_data:

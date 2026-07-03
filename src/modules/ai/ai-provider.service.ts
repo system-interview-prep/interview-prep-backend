@@ -8,7 +8,6 @@ import { TTSProvider } from '../../utils/tts.interface';
 import { ElevenLabsUtil } from '../../utils/elevenlabs.util';
 import { S3Util } from '../../utils/s3.util';
 import { SYSTEM_PROMPT } from './system-prompt';
-import { JOB_PROFILE_JSON_SYSTEM_PROMPT } from './job-profile-json-prompt';
 import { JOB_PROFILE_CANONICAL_EXTRAS_SYSTEM_PROMPT } from './job-profile-canonical-extras-prompt';
 import { JOB_PROFILE_DESCRIPTION_SYSTEM_PROMPT } from './job-profile-description-prompt';
 import { CV_JSON_SYSTEM_PROMPT } from './cv-json-prompt';
@@ -121,64 +120,6 @@ export class AiProviderService {
     });
     if (!response.ok) return [{ urls: ['stun:stun.l.google.com:19302'] }];
     return await response.json();
-  }
-
-  async generateJobProfileJson(input: {
-    jobId: string;
-    title: string;
-    categoryId?: string;
-    keywords?: string[];
-    description?: string;
-    requirements?: string;
-    createdAt?: string;
-  }): Promise<Record<string, any>> {
-    const todayUtc = new Date().toISOString().slice(0, 10);
-    const payload = {
-      ...input,
-      createdAt: input.createdAt ? input.createdAt.slice(0, 10) : todayUtc,
-    };
-
-    const system = [
-      { text: JOB_PROFILE_JSON_SYSTEM_PROMPT },
-      { text: `TODAY_UTC_DATE: ${todayUtc}` },
-    ];
-
-    const messages = [
-      {
-        role: 'user' as ConversationRole,
-        content: [{ text: JSON.stringify(payload) }],
-      },
-    ];
-
-    const response = await this.client.send(
-      new ConverseCommand({
-        modelId: process.env.MODELID || '',
-        system,
-        messages,
-      }),
-    );
-    const text = response.output?.message?.content?.[0]?.text || '';
-
-    const extractJsonCandidate = (raw: string): string => {
-      const trimmed = (raw || '').trim();
-      const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-      const candidate = (fenced?.[1] ?? trimmed).trim();
-      const start = candidate.indexOf('{');
-      const end = candidate.lastIndexOf('}');
-      if (start >= 0 && end > start) return candidate.slice(start, end + 1).trim();
-      return candidate;
-    };
-
-    const jsonCandidate = extractJsonCandidate(text);
-    try {
-      const parsed = JSON.parse(jsonCandidate);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { error: 'MODEL_OUTPUT_NOT_OBJECT', raw: text };
-      }
-      return parsed;
-    } catch {
-      return { error: 'MODEL_OUTPUT_NOT_JSON', raw: text };
-    }
   }
 
   async generateJobProfileCanonicalAndExtras(input: {

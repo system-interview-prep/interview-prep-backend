@@ -11,17 +11,17 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
-import { corsOrigins } from '../config/cors.config';
-import { UserCvService } from '../modules/user-cv/user-cv.service';
+import { JobProfileService } from './job-profile.service';
+import { corsOrigins } from '../../config/cors.config';
 
-@WebSocketGateway({ namespace: '/cv', cors: { origin: corsOrigins, credentials: true } })
-export class CvStatusGateway implements OnGatewayConnection, OnGatewayDisconnect {
+@WebSocketGateway({ namespace: '/jp', cors: { origin: corsOrigins, credentials: true } })
+export class JpStatusGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
-  private readonly logger = new Logger(CvStatusGateway.name);
+  private readonly logger = new Logger(JpStatusGateway.name);
 
   constructor(
     private readonly jwtService: JwtService,
-    private readonly userCvService: UserCvService,
+    private readonly jobProfiles: JobProfileService,
   ) {}
 
   private extractToken(client: Socket): string | null {
@@ -47,7 +47,7 @@ export class CvStatusGateway implements OnGatewayConnection, OnGatewayDisconnect
       const userId = String(payload?.sub || '').trim();
       if (!userId) throw new Error('Missing sub');
       client.data.userId = userId;
-      this.logger.log(`[CV] Client connected: ${client.id} userId=${userId}`);
+      this.logger.log(`[JP] Client connected: ${client.id} userId=${userId}`);
     } catch {
       client.emit('auth-error', { message: 'Unauthorized' });
       client.disconnect(true);
@@ -55,42 +55,45 @@ export class CvStatusGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   handleDisconnect(client: Socket) {
-    this.logger.log(`[CV] Client disconnected: ${client.id}`);
+    this.logger.log(`[JP] Client disconnected: ${client.id}`);
   }
 
   /**
-   * FE calls: socket.emit('join-cv', { cvId })
-   * then receives: 'cv.status' events.
+   * FE calls: socket.emit('join-jp', { uploadId })
+   * then receives: 'jp.status' events.
    */
-  @SubscribeMessage('join-cv')
-  async joinCv(@MessageBody() data: { cvId: string }, @ConnectedSocket() client: Socket) {
+  @SubscribeMessage('join-jp')
+  async joinJp(
+    @MessageBody() data: { uploadId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
     const userId = String(client.data?.userId || '').trim();
-    const cvId = String(data?.cvId || '').trim();
-    if (!userId || !cvId) {
+    const uploadId = String(data?.uploadId || '').trim();
+    if (!userId || !uploadId) {
       throw new WsException({
-        code: 'CV_ROOM_INVALID',
-        cvId,
-        message: 'Invalid cv room request',
+        code: 'JP_ROOM_INVALID',
+        uploadId,
+        message: 'Invalid jp room request',
       });
     }
 
     try {
-      await this.userCvService.get(userId, cvId);
-      const room = `cv:${cvId}`;
+      await this.jobProfiles.getJpUpload(userId, uploadId);
+      const room = `jp:${uploadId}`;
       client.join(room);
       return { joined: true, room };
     } catch {
-      this.logger.warn(`[CV] join denied for userId=${userId} cvId=${cvId}`);
+      this.logger.warn(`[JP] join denied for userId=${userId} uploadId=${uploadId}`);
       throw new WsException({
-        code: 'CV_ROOM_FORBIDDEN',
-        cvId,
-        message: 'Forbidden cv room',
+        code: 'JP_ROOM_FORBIDDEN',
+        uploadId,
+        message: 'Forbidden jp room',
       });
     }
   }
 
-  emitStatus(cvId: string, payload: Record<string, any>) {
-    this.server.to(`cv:${cvId}`).emit('cv.status', payload);
+  emitStatus(uploadId: string, payload: Record<string, any>) {
+    this.server.to(`jp:${uploadId}`).emit('jp.status', payload);
   }
 }
 
