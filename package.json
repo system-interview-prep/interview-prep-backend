@@ -22,8 +22,8 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/platform-socket.io": "^10.4.22",
     "@nestjs/websockets": "^10.4.22",
-    "axios": "^1.14.0",
     "amqplib": "^0.10.9",
+    "axios": "^1.14.0",
     "bcrypt": "^6.0.0",
     "canvas": "^3.2.3",
     "dotenv": "^17.2.3",
@@ -39,9 +39,10 @@
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
     "@nestjs/testing": "^10.0.0",
-    "@types/bcrypt": "^6.0.0",
     "@types/amqplib": "^0.10.7",
-    "@types/multer": "^2.1.0",
+    "@types/bcrypt": "^6.0.0",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^26.1.0",
     "typescript": "^5.0.0"
   }
 }
