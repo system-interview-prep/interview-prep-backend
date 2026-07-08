@@ -10,6 +10,8 @@ import {
   PutItemCommand,
   QueryCommand,
 } from '@aws-sdk/client-dynamodb';
+import { createDynamoDBClient } from '../../config/dynamodb-client';
+import { databaseConfig } from '../../config/database.config';
 import axios from 'axios';
 import { nowISO } from '../../utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -210,16 +212,10 @@ export class ScoringService {
   private matchingPassThreshold: number;
 
   constructor() {
-    this.client = new DynamoDBClient({
-      region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-      },
-    });
-    this.userCvTable = process.env.DYNAMO_USER_CV_TABLE || 'UserCvs';
-    this.jobProfileTable = process.env.DYNAMO_JOB_PROFILE_TABLE || 'JobProfiles';
-    this.scoringHistoryTable = process.env.DYNAMO_SCORING_HISTORY_TABLE || 'InterviewScoringHistory';
+    this.client = createDynamoDBClient();
+    this.userCvTable = databaseConfig.tables.userCvs;
+    this.jobProfileTable = databaseConfig.tables.jobProfiles;
+    this.scoringHistoryTable = databaseConfig.tables.scoringHistory;
     this.matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
     this.matchingServiceTimeoutMs = Math.max(1000, Number(process.env.RESUME_MATCHING_TIMEOUT_MS || 15000));
     this.matchingScoreImportance = Math.max(0, Number(process.env.RESUME_MATCHING_SCORE_IMPORTANCE || 3));
@@ -246,9 +242,6 @@ export class ScoringService {
         `${this.matchingServiceUrl}/api/process-resumes`,
         {
           cvs: [params.candidateText?.trim() || params.candidateCv],
-          jobDescription: params.jobText?.trim() || undefined,
-          job: params.jobText?.trim() ? undefined : params.jobProfile,
-          requirements: params.requirements,
           methods: this.matchingMethods,
           position: 'general',
           metadata: {
