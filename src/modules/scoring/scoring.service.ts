@@ -39,7 +39,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-const SCORING_VERSION = '2.2-matching-calibrated';
+const SCORING_VERSION = '2.3-visual-evidence';
 
 function normalizeCriteriaBreakdown(items: any): any[] {
   if (!Array.isArray(items)) return [];
@@ -427,6 +427,7 @@ export class ScoringService {
       },
       criteriaBreakdown: this.buildMatchingCriteria(params.match),
       summary: this.buildMatchingSummary(params.match),
+      evidence: details.evidence || { must_have: [], nice_to_have: [], constraints: [] },
       metadata: {
         scoringVersion: SCORING_VERSION,
         timestamp: nowISO(),

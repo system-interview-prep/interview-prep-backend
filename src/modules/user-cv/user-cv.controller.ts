@@ -6,10 +6,12 @@ import {
   Post,
   Query,
   Request,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../auth/auth.guard';
 import { UserCvService } from './user-cv.service';
@@ -46,6 +48,22 @@ export class UserCvController {
   async remove(@Request() req: any, @Param('id') id: string) {
     const userId = req.user?.sub;
     return this.userCvService.remove(userId, id);
+  }
+
+  /** GET /users/me/cvs/:id/download */
+  @Get(':id/download')
+  async download(
+    @Request() req: any,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const userId = req.user?.sub;
+    const fileData = await this.userCvService.downloadCvBuffer(userId, id);
+    res.set({
+      'Content-Type': fileData.contentType,
+      'Content-Disposition': `inline; filename="${encodeURIComponent(fileData.filename)}"`,
+    });
+    res.send(fileData.buffer);
   }
 }
 

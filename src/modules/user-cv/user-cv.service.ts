@@ -400,5 +400,18 @@ export class UserCvService {
 
     return { message: 'Deleted' };
   }
+
+  async downloadCvBuffer(userId: string, id: string): Promise<{ filename: string; contentType: string; buffer: Buffer }> {
+    const cv = await this.get(userId, id);
+    if (!cv.s3Key) {
+      throw new NotFoundException('CV file storage path missing');
+    }
+    const buffer = await this.s3.getObjectBuffer(cv.s3Key);
+    return {
+      filename: cv.filename,
+      contentType: cv.contentType || 'application/pdf',
+      buffer,
+    };
+  }
 }
 
