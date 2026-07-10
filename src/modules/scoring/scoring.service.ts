@@ -16,6 +16,7 @@ import axios from 'axios';
 import { nowISO } from '../../utils';
 import { v4 as uuidv4 } from 'uuid';
 import { unwrapLabeledJson } from '../../utils/labeled-json.util';
+import { AiProviderService } from '../ai/ai-provider.service';
 
 function safeParseJson(raw: string): any | null {
   try {
@@ -135,19 +136,19 @@ function extractStructuredJobRequirements(jobProfile: Record<string, any> | null
       : requirements;
   const mustHave = stringsFromUnknown(
     directMustHave ??
-      (requirementsValue && typeof requirementsValue === 'object'
-        ? requirementsValue.mustHave ??
-          requirementsValue.must_have ??
-          requirementsValue.haveMust ??
-          requirementsValue.have_must ??
-          requirementsValue.required
-        : []),
+    (requirementsValue && typeof requirementsValue === 'object'
+      ? requirementsValue.mustHave ??
+      requirementsValue.must_have ??
+      requirementsValue.haveMust ??
+      requirementsValue.have_must ??
+      requirementsValue.required
+      : []),
   );
   const niceToHave = stringsFromUnknown(
     directNiceToHave ??
-      (requirementsValue && typeof requirementsValue === 'object'
-        ? requirementsValue.niceToHave ?? requirementsValue.nice_to_have ?? requirementsValue.preferred
-        : []),
+    (requirementsValue && typeof requirementsValue === 'object'
+      ? requirementsValue.niceToHave ?? requirementsValue.nice_to_have ?? requirementsValue.preferred
+      : []),
   );
   const constraintsRaw = source.constraints;
   const constraintsValue =
@@ -211,7 +212,7 @@ export class ScoringService {
   private matchingMethods: string[];
   private matchingPassThreshold: number;
 
-  constructor() {
+  constructor(private readonly ai: AiProviderService) {
     this.client = createDynamoDBClient();
     this.userCvTable = databaseConfig.tables.userCvs;
     this.jobProfileTable = databaseConfig.tables.jobProfiles;
@@ -591,6 +592,86 @@ export class ScoringService {
       jobId: params.jobId,
       match: algorithmicMatch,
     });
+
+    // === AI Protection & Refinement Layer (Bedrock Review) ===
+    const details = this.getRequirementsDetails(algorithmicMatch);
+    const reqYrs = details.required_years_experience ?? 0;
+    const resYrs = details.resume_years_experience ?? 0;
+    const missingMust = details.missing_must_have || [];
+    const matchedMust = details.matched_must_have || [];
+    const matchedNice = details.matched_nice_to_have || [];
+    const missingNice = details.missing_nice_to_have || [];
+    const jobTitle = jpRes.Item.title?.S || 'Chưa rõ';
+    const candidateHeadline = structuredData?.basics?.headline || 'Chưa rõ';
+
+    const promptUserText = `
+Dưới đây là thông tin so khớp định lượng giữa CV và JD:
+- Tên công việc (JD): ${jobTitle}
+- Vị trí CV ứng viên: ${candidateHeadline}
+- Điểm tương thích định lượng: ${out.score.percentage}%
+- Yêu cầu số năm kinh nghiệm: ${reqYrs} năm. Thực tế CV có: ${resYrs} năm.
+- Các yêu cầu bắt buộc (Must-have) ĐÃ KHỚP: ${matchedMust.join(', ') || 'Không có'}
+- Các yêu cầu bắt buộc (Must-have) BỊ THIẾU: ${missingMust.join(', ') || 'Không có'}
+- Các yêu cầu khuyến khích (Nice-to-have) ĐÃ KHỚP: ${matchedNice.join(', ') || 'Không có'}
+- Các yêu cầu khuyến khích (Nice-to-have) BỊ THIẾU: ${missingNice.join(', ') || 'Không có'}
+- Giải thích từ thuật toán: ${algorithmicMatch.explanation || ''}
+
+Hãy phân tích dữ liệu trên và trả về nhận xét chuẩn hóa dưới định dạng JSON theo đúng cấu trúc yêu cầu.`;
+
+    const SCORING_SUMMARY_SYSTEM_PROMPT = `Bạn là một chuyên gia tuyển dụng cao cấp đánh giá mức độ tương thích giữa Hồ sơ ứng viên (CV) và Bản mô tả công việc (JD).
+Nhiệm vụ của bạn là nhận thông tin so khớp định lượng và trả về một nhận xét tổng quan và danh sách điểm mạnh, điểm yếu chuẩn xác bằng Tiếng Việt.
+
+Hãy trả về kết quả định dạng JSON thuần túy (không bọc trong khối markdown, không thêm text thừa) theo cấu trúc sau:
+{
+  "summary": "Nhận xét tổng quan khách quan và chuyên nghiệp (2-3 câu). Nêu rõ độ phù hợp và lý do chính của điểm số (như thiếu kinh nghiệm hoặc thiếu kỹ năng bắt buộc).",
+  "strengths": [
+    "Điểm mạnh thực sự bám sát các kỹ năng ĐÃ KHỚP của ứng viên (ví dụ: 'Sở hữu kỹ năng Git tốt', 'Có nền tảng về phát triển REST API'). Không bao giờ liệt kê các điểm thiếu sót ở đây.",
+    "Điểm mạnh thứ hai (nêu có)..."
+  ],
+  "weaknesses": [
+    "Điểm yếu/thiếu sót bám sát các yêu cầu BỊ THIẾU của JD hoặc thiếu số năm kinh nghiệm (ví dụ: 'Chưa đủ 2 năm kinh nghiệm lập trình Game với Unity', 'Thiếu kỹ năng sử dụng Git').",
+    "Điểm yếu/thiếu sót thứ hai (nêu có)..."
+  ]
+}
+
+Quy tắc bắt buộc:
+1. KHÔNG được đưa thông tin tiêu cực, thiếu sót hay bị phạt vào mục 'strengths'.
+2. Mỗi gạch đầu dòng trong 'strengths' và 'weaknesses' phải cực kỳ súc tích (dưới 15 từ).
+3. Đảm bảo JSON hợp lệ, không chứa ký tự xuống dòng bên trong giá trị chuỗi.`;
+
+    let summaryJson = {
+      summary: algorithmicMatch.explanation || '',
+      strengths: matchedMust.concat(matchedNice).slice(0, 5),
+      weaknesses: missingMust.concat(missingNice).slice(0, 5)
+    };
+
+    try {
+      const responseText = await this.ai.converseWithSystem({
+        systemPrompts: [SCORING_SUMMARY_SYSTEM_PROMPT],
+        userText: promptUserText,
+        maxTokens: 1024,
+        temperature: 0.0
+      });
+      
+      const cleanJson = responseText.replace(/```json|```/gi, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      if (parsed && typeof parsed === 'object') {
+        summaryJson = {
+          summary: String(parsed.summary || summaryJson.summary).trim(),
+          strengths: Array.isArray(parsed.strengths) ? parsed.strengths.map(String) : summaryJson.strengths,
+          weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.map(String) : summaryJson.weaknesses,
+        };
+      }
+    } catch (err) {
+      console.error('[ScoringService] Failed to refine evaluation summary using AI:', err.message);
+    }
+
+    out.overallFeedback = summaryJson.summary;
+    out.summary = {
+      strengths: summaryJson.strengths,
+      weaknesses: summaryJson.weaknesses,
+      suggestions: out.summary?.suggestions || []
+    };
 
     // Persist history (best-effort; do not block response)
     try {

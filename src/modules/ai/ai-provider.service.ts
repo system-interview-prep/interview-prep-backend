@@ -321,6 +321,7 @@ export class AiProviderService {
     systemPrompts: string[];
     userText: string;
     maxTokens?: number;
+    temperature?: number;
   }): Promise<string> {
     const system = (params.systemPrompts || []).filter(Boolean).map((text) => ({ text }));
     const messages = [
@@ -335,7 +336,10 @@ export class AiProviderService {
         modelId: process.env.MODELID || '',
         system,
         messages,
-        inferenceConfig: params.maxTokens ? { maxTokens: params.maxTokens } : undefined,
+        inferenceConfig: {
+          maxTokens: params.maxTokens || 2048,
+          temperature: params.temperature !== undefined ? params.temperature : 0.1,
+        },
       }),
     );
     return response.output?.message?.content?.[0]?.text || '';
