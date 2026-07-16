@@ -1,6 +1,6 @@
 services:
   rabbitmq:
-    image: rabbitmq:4-management
+    image: rabbitmq:3-management
     container_name: interview-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-interview}
@@ -87,9 +87,28 @@ services:
       - "5001:5001"
     volumes:
       - ../interview-resume-matching-service:/app
-    command: ["python", "app.py"]
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5001", "--reload"]
     depends_on:
       - postgres-db
+    restart: unless-stopped
+
+  matching-worker:
+    build:
+      context: ../interview-resume-matching-service
+      dockerfile: Dockerfile
+    container_name: interview-matching-worker
+    env_file:
+      - ../interview-resume-matching-service/.env
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres-db:5432/matching_db
+      CELERY_BROKER_URL: amqp://interview:interview_password@rabbitmq:5672
+      FLASK_ENV: development
+    volumes:
+      - ../interview-resume-matching-service:/app
+    command: ["celery", "-A", "tasks", "worker", "--loglevel=info", "--concurrency=1"]
+    depends_on:
+      - postgres-db
+      - rabbitmq
     restart: unless-stopped
 
   backend:
