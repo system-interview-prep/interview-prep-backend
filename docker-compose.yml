@@ -83,10 +83,12 @@ services:
     environment:
       DATABASE_URL: postgresql://user:password@postgres-db:5432/matching_db
       FLASK_ENV: development
+      HF_ENDPOINT: https://hf-mirror.com
     ports:
       - "5001:5001"
     volumes:
       - ../interview-resume-matching-service:/app
+      - C:/Users/kenhs/.cache/huggingface:/root/.cache/huggingface
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "5001", "--reload"]
     depends_on:
       - postgres-db
@@ -103,8 +105,10 @@ services:
       DATABASE_URL: postgresql://user:password@postgres-db:5432/matching_db
       CELERY_BROKER_URL: amqp://interview:interview_password@rabbitmq:5672
       FLASK_ENV: development
+      HF_ENDPOINT: https://hf-mirror.com
     volumes:
       - ../interview-resume-matching-service:/app
+      - C:/Users/kenhs/.cache/huggingface:/root/.cache/huggingface
     command: ["celery", "-A", "tasks", "worker", "--loglevel=info", "--concurrency=1"]
     depends_on:
       - postgres-db
