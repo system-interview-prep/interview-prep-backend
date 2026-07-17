@@ -6,7 +6,9 @@ import {
   QueryCommand,
   UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
+import { ConversationRole } from '@aws-sdk/client-bedrock-runtime';
 import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
 import { nowISO } from '../../utils';
 import { AiProviderService } from '../ai/ai-provider.service';
 import { SessionsService } from '../sessions/sessions.service';
@@ -41,6 +43,7 @@ export class InterviewQuestionsService {
   private questionsTable: string;
   private userCvTable: string;
   private jobProfileTable: string;
+  private matchingServiceUrl: string;
 
   constructor(
     private readonly ai: AiProviderService,
@@ -51,6 +54,7 @@ export class InterviewQuestionsService {
     this.questionsTable = databaseConfig.tables.interviewQuestions;
     this.userCvTable = databaseConfig.tables.userCvs;
     this.jobProfileTable = databaseConfig.tables.jobProfiles;
+    this.matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
   }
 
   async getExistingPlan(params: { userId: string; sessionId: string }) {
@@ -250,6 +254,7 @@ export class InterviewQuestionsService {
         .map((x: any) => x.S)
         .filter(Boolean),
       source_refs: safeParseJson(it.source_refs_json?.S || '') || { cv: [], jp: [] },
+      fallback_strategy: safeParseJson(it.fallback_strategy_json?.S || '') || { type: 'motivation', reason: '' },
       created_at: it.created_at?.S || '',
     }));
   }
@@ -291,6 +296,7 @@ export class InterviewQuestionsService {
         .map((x: any) => x.S)
         .filter(Boolean),
       source_refs: safeParseJson(it.source_refs_json?.S || '') || { cv: [], jp: [] },
+      fallback_strategy: safeParseJson(it.fallback_strategy_json?.S || '') || { type: 'motivation', reason: '' },
       created_at: it.created_at?.S || '',
     };
   }
@@ -375,6 +381,73 @@ export class InterviewQuestionsService {
       output_schema_example: schemaHint,
     };
 
+    const tools = [
+      {
+        toolSpec: {
+          name: 'retrieve_interview_template',
+          description: 'Tìm kiếm tài liệu chuẩn, expected signals và common mistakes của một chủ đề/kỹ năng cụ thể trong cơ sở dữ liệu RAG.',
+          inputSchema: {
+            json: {
+              type: 'object',
+              properties: {
+                topic: {
+                  type: 'string',
+                  description: 'Tên chủ đề kỹ thuật để tìm kiếm (ví dụ: spring-ioc, caching-strategies, docker-fundamentals, react-fundamentals).',
+                },
+                difficulty: {
+                  type: 'string',
+                  description: 'Độ khó mong muốn cho câu hỏi (ví dụ: junior, intermediate, senior). Mặc định là senior.',
+                },
+              },
+              required: ['topic'],
+            },
+          },
+        },
+      },
+    ];
+
+    const toolResolver = async (toolUse: { name: string; input: any }) => {
+      if (toolUse.name === 'retrieve_interview_template') {
+        const topic = String(toolUse.input.topic || '').trim();
+        const difficulty = String(toolUse.input.difficulty || 'senior').trim();
+        try {
+          const url = `${this.matchingServiceUrl}/api/v1/rag/retrieve`;
+          const res = await axios.post(
+            url,
+            { query_text: topic, topic, difficulty, k: 3 },
+            { timeout: 4000 }
+          );
+          if (res.status === 200 && res.data?.success) {
+            const chunks = res.data.data?.ranked_chunks || [];
+            return {
+              status: 'success',
+              topic,
+              difficulty,
+              templates: chunks.map((c: any) => ({
+                chunk_id: c.chunk_id,
+                chunk_type: c.metadata?.chunk_type || 'info',
+                text: c.text,
+              })),
+            };
+          }
+        } catch (err) {
+          // ignore
+        }
+        return {
+          status: 'error',
+          message: `Không thể tìm thấy tài liệu chuẩn cho chủ đề: ${topic}`,
+        };
+      }
+      return { status: 'error', message: 'Unknown tool' };
+    };
+
+    const messages = [
+      {
+        role: 'user' as ConversationRole,
+        content: [{ text: JSON.stringify(userPayload) }],
+      },
+    ];
+
     const MAX_ATTEMPTS = 3;
     let lastRaw = '';
     let parsed: any | null = null;
@@ -383,20 +456,26 @@ export class InterviewQuestionsService {
       const extraStrict =
         attempt === 1
           ? ''
-          : `ATTEMPT_${attempt}: Output was invalid/truncated JSON. Return ONLY one complete JSON object.`;
+          : `\nATTEMPT_${attempt}: Output was invalid/truncated JSON. Return ONLY one complete JSON object.`;
 
-      lastRaw = await this.ai.converseWithSystem({
-        systemPrompts: [
-          INTERVIEW_QUESTIONS_SYSTEM_PROMPT,
-          extraStrict,
-        ].filter(Boolean),
-        userText: JSON.stringify(userPayload),
-        maxTokens: 4096,
-      });
+      try {
+        lastRaw = await this.ai.converseWithTools({
+          systemPrompts: [
+            INTERVIEW_QUESTIONS_SYSTEM_PROMPT,
+            extraStrict,
+          ].filter(Boolean),
+          messages,
+          tools,
+          toolResolver,
+          maxTokens: 4096,
+        });
 
-      const jsonCandidate = extractJsonCandidate(lastRaw);
-      parsed = safeParseJson(jsonCandidate);
-      if (parsed && typeof parsed === 'object') break;
+        const jsonCandidate = extractJsonCandidate(lastRaw);
+        parsed = safeParseJson(jsonCandidate);
+        if (parsed && typeof parsed === 'object') break;
+      } catch (err) {
+        console.error('Error during converseWithTools:', err);
+      }
     }
 
     if (!parsed || typeof parsed !== 'object') {
@@ -451,6 +530,10 @@ export class InterviewQuestionsService {
         q.source_refs && typeof q.source_refs === 'object'
           ? q.source_refs
           : { cv: [], jp: [] };
+      const fallbackStrategy =
+        q.fallback_strategy && typeof q.fallback_strategy === 'object'
+          ? q.fallback_strategy
+          : { type: 'motivation', reason: 'Không có chiến lược được định nghĩa.' };
 
       await this.client.send(
         new PutItemCommand({
@@ -468,6 +551,7 @@ export class InterviewQuestionsService {
             question_text: { S: questionText },
             expected_signals: { L: expectedSignals.map((s) => ({ S: s })) },
             source_refs_json: { S: JSON.stringify(sourceRefs) },
+            fallback_strategy_json: { S: JSON.stringify(fallbackStrategy) },
             created_at: { S: createdAt },
           },
         }),
@@ -482,6 +566,7 @@ export class InterviewQuestionsService {
         question_text: questionText,
         expected_signals: expectedSignals,
         source_refs: sourceRefs,
+        fallback_strategy: fallbackStrategy,
         created_at: createdAt,
       });
     }

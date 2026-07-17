@@ -294,6 +294,25 @@ async function processOne(msg: CvQueueMessage) {
         parseSource,
       });
 
+      // Trigger background CV vectorization in Python matching service (fire-and-forget, best effort)
+      try {
+        const matchingServiceUrl = (process.env.RESUME_MATCHING_SERVICE_URL || 'http://localhost:5001').replace(/\/+$/, '');
+        axios.post(`${matchingServiceUrl}/api/v1/cv/vectorize`, {
+          cv_id: msg.cvId,
+          cv_text: rawText || '',
+        }).catch((err: any) => {
+          L.warn('vectorize:cv:fail_async', {
+            message: err?.message || String(err),
+            cvId: msg.cvId,
+          });
+        });
+      } catch (e: any) {
+        L.warn('vectorize:cv:payload_err', {
+          message: e?.message || String(e),
+          cvId: msg.cvId,
+        });
+      }
+
       L.info('job:DONE', {
         structuredDataKeys: Object.keys(structuredData).length,
       });

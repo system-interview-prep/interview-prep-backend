@@ -321,6 +321,7 @@ export class AiProviderService {
     systemPrompts: string[];
     userText: string;
     maxTokens?: number;
+    temperature?: number;
   }): Promise<string> {
     const system = (params.systemPrompts || []).filter(Boolean).map((text) => ({ text }));
     const messages = [
@@ -335,10 +336,79 @@ export class AiProviderService {
         modelId: process.env.MODELID || '',
         system,
         messages,
-        inferenceConfig: params.maxTokens ? { maxTokens: params.maxTokens } : undefined,
+        inferenceConfig: {
+          maxTokens: params.maxTokens || 2048,
+          temperature: params.temperature !== undefined ? params.temperature : 0.1,
+        },
       }),
     );
     return response.output?.message?.content?.[0]?.text || '';
+  }
+
+  async converseWithTools(params: {
+    systemPrompts: string[];
+    messages: any[];
+    tools: any[];
+    toolResolver: (toolUse: { name: string; input: any; toolUseId: string }) => Promise<any>;
+    maxTokens?: number;
+  }): Promise<string> {
+    const system = (params.systemPrompts || []).filter(Boolean).map((text) => ({ text }));
+    const messages = [...params.messages];
+
+    const maxLoops = 10;
+    for (let loop = 0; loop < maxLoops; loop++) {
+      const response = await this.client.send(
+        new ConverseCommand({
+          modelId: process.env.MODELID || '',
+          system,
+          messages,
+          toolConfig: { tools: params.tools },
+          inferenceConfig: params.maxTokens ? { maxTokens: params.maxTokens } : undefined,
+        }),
+      );
+
+      const outputMsg = response.output?.message;
+      if (!outputMsg) {
+        throw new Error('Empty response from Bedrock model');
+      }
+
+      messages.push(outputMsg);
+
+      if (response.stopReason === 'tool_use') {
+        const toolRequests = outputMsg.content?.filter((c) => c.toolUse) || [];
+        const toolResultsContent: any[] = [];
+
+        for (const req of toolRequests) {
+          const toolUse = req.toolUse;
+          if (toolUse) {
+            const result = await params.toolResolver({
+              name: toolUse.name || '',
+              input: toolUse.input,
+              toolUseId: toolUse.toolUseId || '',
+            });
+            toolResultsContent.push({
+              toolResult: {
+                toolUseId: toolUse.toolUseId,
+                content: [{ json: result }],
+              },
+            });
+          }
+        }
+
+        messages.push({
+          role: 'user' as ConversationRole,
+          content: toolResultsContent,
+        });
+      } else {
+        const textContent = outputMsg.content
+          ?.filter((c) => c.text !== undefined)
+          .map((c) => c.text)
+          .join('\n') || '';
+        return textContent;
+      }
+    }
+
+    throw new Error('Exceeded maximum tool calling loops limit');
   }
 }
 
