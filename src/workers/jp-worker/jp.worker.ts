@@ -290,8 +290,23 @@ async function main() {
   });
 }
 
-main().catch((e) => {
-  console.error(`${QUEUE_TAG} fatal`, e);
-  process.exit(1);
-});
+async function mainWithRetry() {
+  const maxRetries = 30;
+  const retryIntervalMs = 5000;
+  let attempts = 0;
 
+  while (attempts < maxRetries) {
+    try {
+      await main();
+      return;
+    } catch (e: any) {
+      attempts++;
+      console.warn(`${QUEUE_TAG} connection failed (attempt ${attempts}/${maxRetries}): ${e.message || e}. Retrying in ${retryIntervalMs / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+    }
+  }
+  console.error(`${QUEUE_TAG} failed to connect after ${maxRetries} attempts.`);
+  process.exit(1);
+}
+
+mainWithRetry();
