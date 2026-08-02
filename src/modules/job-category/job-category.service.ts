@@ -8,6 +8,7 @@ import {
   DynamoDBClient,
   GetItemCommand,
   PutItemCommand,
+  QueryCommand,
   ScanCommand,
   UpdateItemCommand,
 } from '@aws-sdk/client-dynamodb';
@@ -57,6 +58,26 @@ export class JobCategoryService {
       createdAt: item.created_at?.S || '',
       updatedAt: item.updated_at?.S || '',
     };
+  }
+
+  private async isCategoryInUse(categoryId: string): Promise<boolean> {
+    const jobProfilesTable = databaseConfig.tables.jobProfiles;
+    try {
+      const data = await this.client.send(
+        new QueryCommand({
+          TableName: jobProfilesTable,
+          IndexName: 'gsi2',
+          KeyConditionExpression: 'gsi2pk = :pk',
+          ExpressionAttributeValues: {
+            ':pk': { S: `CATEGORY#${categoryId.trim()}` },
+          },
+          Limit: 1,
+        }),
+      );
+      return Boolean(data.Items && data.Items.length > 0);
+    } catch {
+      return false;
+    }
   }
 
   async create(dto: CreateJobCategoryDto): Promise<JobCategory> {
@@ -116,7 +137,8 @@ export class JobCategoryService {
       new UpdateItemCommand({
         TableName: this.tableName,
         Key: { id: { S: id } },
-        UpdateExpression: 'SET #name = :name, description = :description, updated_at = :updatedAt, search_text = :searchText',
+        UpdateExpression:
+          'SET #name = :name, description = :description, updated_at = :updatedAt, search_text = :searchText',
         ExpressionAttributeNames: { '#name': 'name' },
         ExpressionAttributeValues: {
           ':name': { S: name },
@@ -133,6 +155,14 @@ export class JobCategoryService {
   async remove(id: string): Promise<{ message: string }> {
     if (!id?.trim()) throw new BadRequestException('id is required');
     await this.getById(id);
+
+    const inUse = await this.isCategoryInUse(id);
+    if (inUse) {
+      throw new BadRequestException(
+        'Cannot delete category currently in use by job profiles',
+      );
+    }
+
     await this.client.send(
       new DeleteItemCommand({
         TableName: this.tableName,
@@ -142,7 +172,11 @@ export class JobCategoryService {
     return { message: 'Deleted' };
   }
 
-  async list(params: { limit?: number; cursor?: string; q?: string }): Promise<ListJobCategoriesResult> {
+  async list(params: {
+    limit?: number;
+    cursor?: string;
+    q?: string;
+  }): Promise<ListJobCategoriesResult> {
     const limit = Math.min(Math.max(Number(params.limit || 50), 1), 100);
     const cursor = params.cursor ? decodeCursor(params.cursor) : undefined;
     const q = params.q?.trim();
@@ -168,4 +202,3 @@ export class JobCategoryService {
     };
   }
 }
-

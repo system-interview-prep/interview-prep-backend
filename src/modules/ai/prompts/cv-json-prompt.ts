@@ -26,4 +26,3 @@ SCHEMA:
   "certifications": string[],
   "tags": string[]
 }`;
-

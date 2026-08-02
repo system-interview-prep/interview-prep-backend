@@ -11,9 +11,9 @@ CRITICAL OUTPUT RULES:
 - Output MUST be VALID JSON only (no markdown, no commentary, no code fences).
 - Use double quotes for all JSON keys and strings.
 - Do NOT include trailing commas.
-- Do NOT hallucinate. If the JD does not contain information for a canonical field, use null/[]/\"\" according to schema.
+- Do NOT hallucinate. If the JD does not contain information for a canonical field, use null/[]/"" according to schema.
 - Keep arrays unique and reasonably short (max ~30 items per array unless the input explicitly contains more).
-- Normalize skills/tools names to a canonical form when possible (e.g., \"JS\" -> \"JavaScript\", \"ReactJS\" -> \"React\").
+- Normalize skills/tools names to a canonical form when possible (e.g., "JS" -> "JavaScript", "ReactJS" -> "React").
 - tags must be lowercase, kebab-case when possible.
 - IMPORTANT: keys are machine-friendly (snake_case). Provide human-friendly labels via extras objects.
 
@@ -73,4 +73,3 @@ EXTRAS RULES:
 - Use stable, readable keys in snake_case when possible (e.g., "benefits", "company_culture", "interview_process").
 - Do NOT include "__canonical_labels". Canonical already includes labels per-field.
 `;
-

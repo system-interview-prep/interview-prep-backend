@@ -12,14 +12,12 @@ import { JobCategoryModule } from './modules/job-category/job-category.module';
 import { UserCvModule } from './modules/user-cv/user-cv.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { VoiceModule } from './modules/voice/voice.module';
-import { AiUtilsModule } from './modules/ai-utils/ai-utils.module';
 import { ScoringModule } from './modules/scoring/scoring.module';
 import { InterviewQuestionsModule } from './modules/interview-questions/interview-questions.module';
 
 @Module({
   imports: [
     AiModule,
-    AiUtilsModule,
     ScoringModule,
     InterviewQuestionsModule,
     AuthModule,

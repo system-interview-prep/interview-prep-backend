@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Post, UnauthorizedException } from '@nestjs/common';
 import { CvStatusGateway } from './cv-status.gateway';
 
 @Controller('internal/cv-events')
@@ -16,7 +16,7 @@ export class UserCvWorkerController {
   ) {
     const expected = process.env.WORKER_SECRET || '';
     if (!expected || secret !== expected) {
-      return { ok: false };
+      throw new UnauthorizedException('Invalid worker secret');
     }
     if (body?.cvId) {
       this.cvGateway.emitStatus(body.cvId, body.payload || {});
@@ -24,4 +24,3 @@ export class UserCvWorkerController {
     return { ok: true };
   }
 }
-

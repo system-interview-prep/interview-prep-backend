@@ -1,12 +1,15 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { AiProviderService } from '../ai/ai-provider.service';
+import { AiProviderService } from './ai-provider.service';
 
 @Controller('ai')
-export class AiUtilsController {
+export class AiController {
   constructor(private readonly ai: AiProviderService) {}
 
-  @Post('simli-session')
-  async createSimliSession(@Body('faceId') faceId?: string) {
+  /**
+   * Khởi tạo phiên WebRTC Avatar AI (Vendor-agnostic domain endpoint).
+   */
+  @Post('avatar-session')
+  async createAvatarSession(@Body('faceId') faceId?: string) {
     try {
       const session_token = await this.ai.createSimliSession(faceId);
       return { session_token };
@@ -15,8 +18,11 @@ export class AiUtilsController {
     }
   }
 
-  @Post('simli-ice-servers')
-  async getSimliIceServers() {
+  /**
+   * Lấy danh sách ICE/STUN/TURN Servers cho WebRTC Avatar AI.
+   */
+  @Post('avatar-ice-servers')
+  async getAvatarIceServers() {
     try {
       const iceServers = await this.ai.getSimliIceServers();
       return { iceServers };
@@ -25,4 +31,3 @@ export class AiUtilsController {
     }
   }
 }
-

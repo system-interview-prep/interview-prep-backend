@@ -12,7 +12,7 @@
     "rootDir": "./src",
     "baseUrl": "./",
     "incremental": true,
-    "types": ["node", "multer"]
+    "types": ["node", "multer", "jest"]
   },
   "exclude": ["node_modules", "dist"]
 }
