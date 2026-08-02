@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Post, UnauthorizedException } from '@nestjs/common';
 import { JpStatusGateway } from './jp-status.gateway';
 
 @Controller('internal/jp-events')
@@ -16,7 +16,7 @@ export class JobProfileWorkerController {
   ) {
     const expected = process.env.WORKER_SECRET || '';
     if (!expected || secret !== expected) {
-      return { ok: false };
+      throw new UnauthorizedException('Invalid worker secret');
     }
     if (body?.uploadId) {
       this.jpGateway.emitStatus(body.uploadId, body.payload || {});
@@ -24,4 +24,3 @@ export class JobProfileWorkerController {
     return { ok: true };
   }
 }
-

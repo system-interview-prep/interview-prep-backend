@@ -38,4 +38,3 @@ RECOMMENDED STRUCTURE (NO # HEADINGS):
 **Quy trình / Cách ứng tuyển**
 - ...
 `;
-
