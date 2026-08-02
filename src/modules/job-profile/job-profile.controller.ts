@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -16,19 +17,48 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../auth/auth.guard';
 import { JobProfileService } from './job-profile.service';
 
+const ALLOWED_MIME_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+];
+
+const ALLOWED_EXTENSIONS = /\.(pdf|doc|docx|txt|png|jpg|jpeg|webp)$/i;
+
 @Controller('admin/job-profiles')
 @UseGuards(AuthGuard)
 export class JobProfileController {
   constructor(private readonly jobProfileService: JobProfileService) {}
 
-  /** POST /admin/job-profiles/uploads (multipart/form-data field: "file") */
+  /** POST /admin/job-profiles/uploads (multipart/form-data field: "file", max 10MB) */
   @Post('uploads')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      fileFilter: (_req, file, callback) => {
+        const extMatch = ALLOWED_EXTENSIONS.test(file.originalname);
+        const mimeMatch = ALLOWED_MIME_TYPES.includes(file.mimetype);
+        if (!extMatch && !mimeMatch) {
+          return callback(
+            new BadRequestException(
+              'Invalid file type. Only PDF, DOC, DOCX, TXT, PNG, JPEG, and WEBP files are allowed.',
+            ),
+            false,
+          );
+        }
+        callback(null, true);
+      },
+    }),
+  )
   async uploadJd(@Request() req: any, @UploadedFile() file: Express.Multer.File) {
     const userId = String(req.user?.sub || '').trim();
     return this.jobProfileService.uploadJpFile(userId, file);
   }
- 
+
   @Get('uploads/:id')
   async getUpload(@Request() req: any, @Param('id') id: string) {
     const userId = String(req.user?.sub || '').trim();
@@ -137,4 +167,3 @@ export class JobProfileController {
     return this.jobProfileService.remove(id);
   }
 }
-

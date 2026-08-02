@@ -7,10 +7,10 @@ import {
 import { TTSProvider } from '../../utils/tts.interface';
 import { ElevenLabsUtil } from '../../utils/elevenlabs.util';
 import { S3Util } from '../../utils/s3.util';
-import { SYSTEM_PROMPT } from './system-prompt';
-import { JOB_PROFILE_CANONICAL_EXTRAS_SYSTEM_PROMPT } from './job-profile-canonical-extras-prompt';
-import { JOB_PROFILE_DESCRIPTION_SYSTEM_PROMPT } from './job-profile-description-prompt';
-import { CV_JSON_SYSTEM_PROMPT } from './cv-json-prompt';
+import { SYSTEM_PROMPT } from './prompts/system-prompt';
+import { JOB_PROFILE_CANONICAL_EXTRAS_SYSTEM_PROMPT } from './prompts/job-profile-canonical-extras-prompt';
+import { JOB_PROFILE_DESCRIPTION_SYSTEM_PROMPT } from './prompts/job-profile-description-prompt';
+import { CV_JSON_SYSTEM_PROMPT } from './prompts/cv-json-prompt';
 import * as dotenv from 'dotenv';
 
 @Injectable()
