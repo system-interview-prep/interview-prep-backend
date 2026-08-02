@@ -26,6 +26,17 @@ import { createDynamoDBClient } from '../../config/dynamodb-client';
 import { databaseConfig } from '../../config/database.config';
 import { rabbitMqConfig } from '../../config/rabbitmq.config';
 
+const ALLOWED_MIME_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+];
+
+const ALLOWED_EXTENSIONS = /\.(pdf|doc|docx|png|jpg|jpeg|webp)$/i;
+
 @Injectable()
 export class UserCvService {
   private readonly logger = new Logger(UserCvService.name);
@@ -140,6 +151,15 @@ export class UserCvService {
     if (!file) throw new BadRequestException('file is required');
     if (!file.buffer?.length) throw new BadRequestException('file is empty');
 
+    // MIME type & extension validation
+    const mimeValid = ALLOWED_MIME_TYPES.includes(file.mimetype);
+    const extValid = ALLOWED_EXTENSIONS.test(file.originalname || '');
+    if (!mimeValid && !extValid) {
+      throw new BadRequestException(
+        'Invalid file type. Only PDF, DOC, DOCX, PNG, JPEG, and WEBP files are allowed.',
+      );
+    }
+
     const checksum = createHash('sha256').update(file.buffer).digest('hex');
     const existing = await this.findByChecksum(userId, checksum);
     if (existing) {
@@ -209,7 +229,11 @@ export class UserCvService {
         if (e instanceof TransactionCanceledException && conditionalFailed) {
           try {
             await this.s3.deleteObject(uploaded.key);
-          } catch {}
+          } catch (s3Err: any) {
+            this.logger.error(
+              `Failed to delete orphaned S3 object ${uploaded.key} during dedupe rollback: ${s3Err?.message || s3Err}`,
+            );
+          }
           const existingId = await this.getDedupeCvId(userId, checksum);
           if (existingId) return this.get(userId, existingId);
           const fb = await this.findByChecksum(userId, checksum);
@@ -327,9 +351,24 @@ export class UserCvService {
     );
   }
 
-  async list(userId: string, limit = 50): Promise<{ items: UserCv[] }> {
+  async list(
+    userId: string,
+    limit = 50,
+    cursor?: string,
+  ): Promise<{ items: UserCv[]; nextToken?: string }> {
     if (!userId?.trim()) throw new BadRequestException('userId is required');
     const lim = Math.min(Math.max(Number(limit || 50), 1), 100);
+
+    let exclusiveStartKey: Record<string, any> | undefined = undefined;
+    if (cursor?.trim()) {
+      try {
+        exclusiveStartKey = JSON.parse(
+          Buffer.from(cursor.trim(), 'base64').toString('utf-8'),
+        );
+      } catch {
+        throw new BadRequestException('Invalid pagination cursor');
+      }
+    }
 
     const data = await this.client.send(
       new QueryCommand({
@@ -341,10 +380,19 @@ export class UserCvService {
         },
         Limit: lim,
         ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
       }),
     );
 
-    return { items: (data.Items || []).map((it) => this.toDomain(it)) };
+    let nextToken: string | undefined = undefined;
+    if (data.LastEvaluatedKey) {
+      nextToken = Buffer.from(JSON.stringify(data.LastEvaluatedKey)).toString('base64');
+    }
+
+    return {
+      items: (data.Items || []).map((it) => this.toDomain(it)),
+      nextToken,
+    };
   }
 
   async get(userId: string, id: string): Promise<UserCv> {
@@ -369,10 +417,14 @@ export class UserCvService {
   async remove(userId: string, id: string): Promise<{ message: string }> {
     const cv = await this.get(userId, id);
 
-    // Best-effort S3 delete (if it fails, still delete metadata)
+    // Best-effort S3 delete with logging
     try {
       if (cv.s3Key) await this.s3.deleteObject(cv.s3Key);
-    } catch {}
+    } catch (s3Err: any) {
+      this.logger.warn(
+        `Failed to delete S3 object ${cv.s3Key} for CV ${id}: ${s3Err?.message || s3Err}`,
+      );
+    }
 
     await this.client.send(
       new DeleteItemCommand({
@@ -395,13 +447,20 @@ export class UserCvService {
             },
           }),
         );
-      } catch {}
+      } catch (dedupeErr: any) {
+        this.logger.warn(
+          `Failed to delete dedupe record for checksum ${cv.checksum}: ${dedupeErr?.message || dedupeErr}`,
+        );
+      }
     }
 
     return { message: 'Deleted' };
   }
 
-  async downloadCvBuffer(userId: string, id: string): Promise<{ filename: string; contentType: string; buffer: Buffer }> {
+  async downloadCvBuffer(
+    userId: string,
+    id: string,
+  ): Promise<{ filename: string; contentType: string; buffer: Buffer }> {
     const cv = await this.get(userId, id);
     if (!cv.s3Key) {
       throw new NotFoundException('CV file storage path missing');
@@ -414,4 +473,3 @@ export class UserCvService {
     };
   }
 }
-
